@@ -280,17 +280,20 @@ describe('serializeRequest: reasoning effort mapping', () => {
     expect(body.reasoning_effort).toBe('high')
   })
 
-  it('expresses off via chat_template_kwargs by default', async () => {
+  it('expresses off as none plus enable_thinking false by default', async () => {
     const body = await serializeRequest(
       options({ reasoningEffort: ReasoningEffortId('off') }),
       REASONING_MODEL,
       undefined,
     )
-    expect(body.reasoning_effort).toBeUndefined()
+    // `none` is vLLM's canonical no-thinking effort spelling (verified
+    // against a live Qwen3.8 build; `off` itself is a 400); the kwarg
+    // additionally stops the template from generating thinking.
+    expect(body.reasoning_effort).toBe('none')
     expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
   })
 
-  it('expresses off as plain omission when offMode is omit', async () => {
+  it('expresses off as none only when offMode is omit', async () => {
     const model: QwenLocalModel = {
       id: 'qwen3.8',
       multimodal: false,
@@ -301,7 +304,7 @@ describe('serializeRequest: reasoning effort mapping', () => {
       model,
       undefined,
     )
-    expect(body.reasoning_effort).toBeUndefined()
+    expect(body.reasoning_effort).toBe('none')
     expect(body.chat_template_kwargs).toBeUndefined()
   })
 
@@ -365,7 +368,7 @@ describe('serializeRequest: reasoning effort mapping', () => {
       model,
       undefined,
     )
-    expect(body.reasoning_effort).toBeUndefined()
+    expect(body.reasoning_effort).toBe('none')
     expect(body.chat_template_kwargs).toEqual({
       enable_thinking: false,
       preserve_thinking: false,
@@ -378,7 +381,7 @@ describe('serializeRequest: reasoning effort mapping', () => {
       REASONING_MODEL,
       undefined,
     )
-    expect(body.reasoning_effort).toBeUndefined()
+    expect(body.reasoning_effort).toBe('none')
     expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
   })
 

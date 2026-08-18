@@ -90,20 +90,20 @@ Images are inlined as `image_url` parts with `data:<mediaType>;base64,…` value
 ```yaml
 reasoning:
   efforts:
-    - { id: off, wire: null }      # the one level allowed to send nothing
+    - { id: off, wire: none }      # vLLM's canonical no-thinking spelling
     - { id: low, wire: low }       # any wire spelling your vLLM accepts
     - { id: high, wire: high }
   defaultEffort: high              # optional; absent = vLLM's own default
   offMode: chat-template-kwargs    # optional; 'chat-template-kwargs' | 'omit'
 ```
 
-- **Qwen3.8-27B's official levels**: `xhigh` (the model's default), `medium`, `low` — the bundle baseline declares exactly these plus `off`. Thinking is ON by default, so omitting the parameter entirely (no `defaultEffort`, or `offMode: omit` without an effort) keeps the deployment's thinking default.
-- `efforts` (required, display order) — the authoritative selectable list. Each `id` is an opaque value the harness carries per request; `name` (default `id`) is what selectors show. A level not declared is not offered. `id` is unique per model. The `off` level is **optional**: it is the adapter's own "no thinking" selector, not a wire value (selecting it sends no `reasoning_effort` at all). Omit it for a deployment with no way to disable thinking — then effort selection can never turn thinking off, and `session-title` calls keep the ordinary default instead of forcing `off`.
-- `wire` — the exact spelling sent as `reasoning_effort`. Only `off` may use `null` (send nothing); every other level must name a non-empty wire value. Rename freely (`{ id: max, wire: high }`) — the harness never sees wire spellings.
+- **Qwen3.8-27B's official levels**: `xhigh` (the model's default), `medium`, `low` — the bundle baseline declares exactly these plus `off`. vLLM's accepted `reasoning_effort` vocabulary is `none` / `minimal` / `low` / `medium` / `high` / `xhigh`; `off` as a wire value is a 400, so `off` maps to `wire: none` (verified against a live Qwen3.8 vLLM build). Thinking is ON by default, so omitting the parameter entirely (no `defaultEffort`, or `offMode: omit` without an effort) keeps the deployment's thinking default.
+- `efforts` (required, display order) — the authoritative selectable list. Each `id` is an opaque value the harness carries per request; `name` (default `id`) is what selectors show. A level not declared is not offered. `id` is unique per model. The `off` level is **optional**: it is the adapter's own "no thinking" selector. Omit it for a deployment with no way to disable thinking — then effort selection can never turn thinking off, and `session-title` calls keep the ordinary default instead of forcing `off`.
+- `wire` — the exact spelling sent as `reasoning_effort`. `off` uses `none` by convention and is the only level allowed `null` (send nothing — the pre-parameter escape hatch; the offMode kwargs still carry the expression); every other level must name a non-empty wire value. Rename freely (`{ id: max, wire: high }`) — the harness never sees wire spellings.
 - `defaultEffort` — materialized into requests when the caller omits an effort. Absent preserves vLLM's own default.
-- `offMode` — how `off` is expressed beyond omitting `reasoning_effort`:
-  - `chat-template-kwargs` (default): also sends `chat_template_kwargs: { enable_thinking: false }` — the model's documented non-thinking mode (thinking is ON by default, so omitting the parameter alone keeps it on).
-  - `omit`: sends nothing extra — use for deployments where absence of `reasoning_effort` already means no thinking.
+- `offMode` — the template-side expression of `off`, sent alongside its wire value:
+  - `chat-template-kwargs` (default): also sends `chat_template_kwargs: { enable_thinking: false }` — the model's documented non-thinking mode (thinking is ON by default, so the effort value alone leaves the template's gate open; the kwarg closes it).
+  - `omit`: sends nothing extra — use for deployments where `none` alone already means no thinking.
 - Per-request selection takes precedence over `defaultEffort`. A request naming a level the model does not declare fails with `UNSUPPORTED_REASONING_EFFORT` before any network I/O — never clamped.
 - `session-title` auxiliary calls are forced to `off`: a short title never needs thinking.
 
@@ -121,8 +121,8 @@ History replay: with `preserve_thinking` at its template default (ON), assistant
 |---|---|---|
 | Architecture | `Qwen3_5ForConditionalGeneration` — **native vision-language model** (image + video) | baseline `multimodal: true` |
 | Context length | **262,144 native**, extensible to ~1M via YaRN / `--max-model-len` | `DEFAULT_CONTEXT_WINDOW = 262144`; raise `contextWindow` per model when your vLLM runs 1M |
-| Thinking default | **ON**; disable per request with `chat_template_kwargs: { enable_thinking: false }` | `off` level + `offMode: chat-template-kwargs` (default) |
-| `reasoning_effort` levels | **`xhigh` (default), `medium`, `low`** | baseline `efforts` + `defaultEffort: xhigh` |
+| Thinking default | **ON**; disable per request with `chat_template_kwargs: { enable_thinking: false }` | `off` level (wire `none`) + `offMode: chat-template-kwargs` (default) |
+| `reasoning_effort` levels | **`xhigh` (default), `medium`, `low`** (vLLM accepts `none` / `minimal` / `low` / `medium` / `high` / `xhigh`; `off` is a 400) | baseline `efforts` (`off` → `wire: none`) + `defaultEffort: xhigh` |
 | `preserve_thinking` | **ON by default**; retains historical thinking blocks | reasoning replay as `reasoning_content`; `preserveThinking: false` sends the kwarg |
 | Recommended sampling | thinking: `temperature=1.0, top_p=0.95, top_k=20`; non-thinking: `temperature=0.7, top_p=0.8, top_k=20, presence_penalty=1.5` | only `temperature` is harness-exposable; the rest rides your deployment defaults (vLLM's generation defaults match the thinking set) |
 | Recommended output budget | reasoning 262,144 / final 131,072 when split limits are available on a 1M context | `maxTokens` per model / per request |

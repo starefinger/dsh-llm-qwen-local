@@ -9,8 +9,11 @@
  *   refusal naming the model; over-claiming costs a provider refusal mid-turn.
  * - Reasoning efforts are adapter-owned opaque ids with a configurable wire
  *   spelling per level, so any vLLM/Qwen `reasoning_effort` vocabulary is
- *   expressible. `off` is the one level whose wire may be `null` (send
- *   nothing); how `off` is expressed beyond that is `offMode`.
+ *   expressible. `off` is the canonical "no thinking" level: its default
+ *   wire spelling is `none` (vLLM's accepted no-thinking value, sent
+ *   alongside the offMode kwarg), and a `null` wire (send no
+ *   `reasoning_effort` at all; kwargs only) is still legal for it. How
+ *   `off` is expressed on the wire is `offMode`.
  *
  * @module dsh-llm-qwen-local/config
  */
@@ -28,8 +31,11 @@ export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 
 /**
  * One selectable reasoning effort. `id` is the opaque value the harness
- * carries in `GenerateOptions.reasoningEffort`; `wire` is the spelling sent as
- * `reasoning_effort` (or `null` for `off`: send nothing).
+ * carries in `GenerateOptions.reasoningEffort`; `wire` is the spelling sent
+ * as `reasoning_effort`. `off`'s wire is `none` by convention (vLLM's
+ * canonical no-thinking spelling) and `null` for a deployment whose vLLM
+ * predates the parameter (send nothing; the offMode kwarg carries the
+ * expression).
  */
 export interface QwenLocalReasoningEffort {
   /** Opaque stable effort id (unique within the model). */
@@ -44,16 +50,18 @@ export interface QwenLocalReasoningEffort {
 export interface QwenLocalReasoning {
   /**
    * Selectable levels in display order. `off` is OPTIONAL (0 or 1 entry; the
-   * unique-id rule caps it at one): it is the adapter's own "no thinking"
-   * selector level, not a wire value — selecting it sends no
-   * `reasoning_effort` at all. Omit it for deployments with no way to disable
-   * thinking.
+   * unique-id rule caps it at one): the adapter's own "no thinking" selector
+   * level — wire `none` by convention (vLLM's canonical no-thinking value),
+   * `null` on a build that predates the `reasoning_effort` parameter (then
+   * only the offMode kwargs express off). Omit it for deployments with no
+   * way to disable thinking.
    */
   efforts: QwenLocalReasoningEffort[]
   /** Default level materialized when callers omit an effort; absent = provider default. */
   defaultEffort?: string
   /**
-   * Wire expression of `off` beyond omitting `reasoning_effort`:
+   * Template-side expression of `off`, sent alongside the off level's wire
+   * value (`none` by convention; `null` on a pre-parameter build):
    * `chat-template-kwargs` (default) sends
    * `chat_template_kwargs: { enable_thinking: false }` for the vLLM Qwen
    * chat template; `omit` sends nothing extra.

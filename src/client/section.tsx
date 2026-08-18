@@ -661,7 +661,7 @@ export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX
                     type="button"
                     onClick={() => setModel(index, {
                       hasReasoning: true,
-                      efforts: [{ id: 'off', name: '', wire: '' }],
+                      efforts: [{ id: 'off', name: '', wire: 'none' }],
                     })}
                   >
                     {t('addReasoning')}

@@ -14,8 +14,8 @@
  * else the model's configured `defaultEffort`) maps through the model's
  * configured effort table to a wire `reasoning_effort` spelling
  * (Qwen3.8-27B's official levels: `xhigh` (default), `medium`, `low`). The
- * `off` level (wire `null`) sends nothing and additionally expresses
- * `offMode`: `chat-template-kwargs` appends
+ * `off` level (wire `none` by convention; `null` on a pre-parameter build)
+  * sends its wire value plus the `offMode` expression: `chat-template-kwargs` appends
  * `chat_template_kwargs: { enable_thinking: false }` (the model's documented
  * non-thinking mode; thinking is ON by default); `omit` appends nothing.
  * `session-title` auxiliary calls are forced to `off`: a short title never
@@ -50,6 +50,20 @@ interface ResolvedWireControl {
   reasoningEffort?: string
   chatTemplateKwargs?: { enable_thinking?: false; preserve_thinking?: false }
 }
+
+/**
+ * The off level's canonical wire value. vLLM's accepted `reasoning_effort`
+ * vocabulary is `none`/`minimal`/`low`/`medium`/`high`/`xhigh` — `none` is
+ * the "no thinking" spelling (verified against a live Qwen3.8 vLLM build;
+ * `off` itself is a 400). It is sent together with
+ * `chat_template_kwargs: { enable_thinking: false }`: the effort value tells
+ * the reasoning parser to discard thinking tokens, the template kwarg stops
+ * the model from generating them. A deployment whose vLLM predates
+ * `none` (400s on it) expresses off the old way — `wire: null` plus
+ * `offMode: chat-template-kwargs` without the effort, or a custom
+ * non-null wire spelling.
+ */
+const OFF_WIRE_EFFORT = 'none'
 
 /**
  * Map the selected (or configured-default) effort and the model's
@@ -88,8 +102,13 @@ function resolveWireControl(options: GenerateOptions, model: QwenLocalModel): Re
     )
   }
   if (effort.wire === null) {
-    if (reasoning.offMode === 'chat-template-kwargs') kwargs.enable_thinking = false
-    return Object.keys(kwargs).length > 0 ? { chatTemplateKwargs: kwargs } : {}
+    // The off level sends the canonical `none` effort so the reasoning
+    // parser drops thinking tokens, plus the offMode expression:
+    // `chat-template-kwargs` appends `enable_thinking: false` (the model's
+    // documented non-thinking mode); `omit` appends nothing.
+    kwargs.enable_thinking = false
+    if (reasoning.offMode === 'omit') delete kwargs.enable_thinking
+    return { reasoningEffort: OFF_WIRE_EFFORT, ...(Object.keys(kwargs).length > 0 ? { chatTemplateKwargs: kwargs } : {}) }
   }
   return {
     reasoningEffort: effort.wire,

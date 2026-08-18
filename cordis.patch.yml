@@ -17,10 +17,11 @@
 #                multimodal: false
 #
 #   2. Match your vLLM reasoning_effort vocabulary (any wire spelling works;
-#      only `off` may use `wire: null`):
+#      `off` is `wire: none` on modern vLLM — its canonical no-thinking
+#      spelling — or `wire: null` on a build that predates the parameter):
 #        reasoning:
 #          efforts:
-#            - { id: off, wire: null }
+#            - { id: off, wire: none }
 #            - { id: low, wire: low }
 #            - { id: medium, wire: medium }
 #            - { id: xhigh, wire: xhigh }
@@ -35,9 +36,13 @@
             name: Qwen3.8-27B (local)
             multimodal: true
             reasoning:
+              # `off` sends `reasoning_effort: "none"` (vLLM's canonical
+              # no-thinking spelling) together with the offMode kwarg;
+              # `wire: low` was a misfit — low is a real, smaller-thinking
+              # level, not "off".
               efforts:
                 - id: off
-                  wire: low
+                  wire: none
                 - id: low
                   wire: low
                 - id: medium
