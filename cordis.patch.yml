@@ -1,0 +1,44 @@
+# Baseline layer contributed by the dsh-llm-qwen-local bundle.
+#
+# Override the whole line from your profile's cordis.patch.yml by the same
+# `id` — a patch replaces the target line's ENTIRE config value (no deep
+# merge), so restate every key you keep. Two common edits:
+#
+#   1. Enable the multimodal switch for the model:
+#        - id: llm-qwen-local
+#          ...
+#          config:
+#            models:
+#              - id: qwen3.8
+#                multimodal: true
+#
+#   2. Match your vLLM reasoning_effort vocabulary (any wire spelling works;
+#      only `off` may use `wire: null`):
+#        reasoning:
+#          efforts:
+#            - { id: off, wire: null }
+#            - { id: low, wire: low }
+#            - { id: medium, wire: medium }
+#            - { id: high, wire: high }
+#            - { id: max, wire: high }
+#          defaultEffort: high
+- insert:
+    - id: llm-qwen-local
+      name: dsh-llm-qwen-local
+      config:
+        baseURL: !!js "process.env.QWEN_LOCAL_BASE_URL ?? 'http://127.0.0.1:8000/v1'"
+        models:
+          - id: qwen3.8
+            name: Qwen3.8 (local)
+            multimodal: false
+            reasoning:
+              efforts:
+                - id: off
+                  wire: null
+                - id: low
+                  wire: low
+                - id: medium
+                  wire: medium
+                - id: high
+                  wire: high
+              defaultEffort: high
