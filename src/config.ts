@@ -68,12 +68,20 @@ export interface QwenLocalModel {
   /** Per-request output cap for this model; omitted = route default. */
   maxTokens?: number
   /**
-   * Multimodal switch. `false` (default) declares a text-only model: the
-   * harness refuses images before send, and the adapter refuses again at
-   * serialization time. `true` declares `image` input and resolves image
-   * bytes through the durable attachment service.
+   * Multimodal switch. Qwen3.8-27B is a native vision-language model, so a
+   * deployment serving it should set this to `true`; `false` (schema default)
+   * declares a text-only model: the harness refuses images before send, and
+   * the adapter refuses again at serialization time. `true` declares `image`
+   * input and resolves image bytes through the durable attachment service.
    */
   multimodal?: boolean
+  /**
+   * Whether the deployment preserves thinking blocks from historical messages
+   * (Qwen3.8's `preserve_thinking`, template default ON). `false` sends
+   * `chat_template_kwargs: { preserve_thinking: false }` and the adapter stops
+   * replaying assistant reasoning into history.
+   */
+  preserveThinking?: boolean
   /** Reasoning capability; absent = the model exposes no selectable efforts. */
   reasoning?: QwenLocalReasoning
 }
@@ -122,6 +130,7 @@ const modelSchema: z<QwenLocalModel> = z.object({
   contextWindow: z.number().step(1).min(1),
   maxTokens: z.number().step(1).min(1),
   multimodal: z.boolean().default(false),
+  preserveThinking: z.boolean().default(true),
   reasoning: reasoningSchema,
 })
 
@@ -219,6 +228,7 @@ function resolveModel(raw: QwenLocalModel, index: number): QwenLocalModel {
     ...raw.contextWindow === undefined ? {} : { contextWindow: raw.contextWindow },
     ...raw.maxTokens === undefined ? {} : { maxTokens: raw.maxTokens },
     multimodal: raw.multimodal === true,
+    preserveThinking: raw.preserveThinking !== false,
     ...raw.reasoning === undefined ? {} : { reasoning: resolveReasoning(raw.reasoning, raw.id) },
   }
 }

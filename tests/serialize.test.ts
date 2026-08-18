@@ -114,7 +114,7 @@ describe('serializeRequest: messages', () => {
     }])
   })
 
-  it('drops assistant reasoning blocks on replay', async () => {
+  it('replays assistant reasoning as reasoning_content with preserve_thinking at its default (on)', async () => {
     const assistant = createAssistantMessage({
       content: [
         { type: 'reasoning', text: 'thinking hard' },
@@ -123,7 +123,54 @@ describe('serializeRequest: messages', () => {
       source: { provider: 'qwen-local', model: 'qwen3.8' },
     })
     const body = await serializeRequest(options({ messages: [assistant] }), MODEL_TEXT, undefined)
+    expect(body.messages).toEqual([{
+      role: 'assistant',
+      content: 'answer',
+      reasoning_content: 'thinking hard',
+    }])
+  })
+
+  it('does not replay reasoning on tool-call turns (the official Qwen3.8 example shape)', async () => {
+    const assistant = createAssistantMessage({
+      content: [
+        { type: 'reasoning', text: 'plan the command' },
+        {
+          type: 'tool-call',
+          id: CallId('call-1'),
+          name: 'bash',
+          arguments: '{"command":"ls"}',
+        },
+      ],
+      source: { provider: 'qwen-local', model: 'qwen3.8' },
+    })
+    const body = await serializeRequest(options({ messages: [assistant] }), MODEL_TEXT, undefined)
+    expect(body.messages).toEqual([{
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: 'call-1',
+        type: 'function',
+        function: { name: 'bash', arguments: '{"command":"ls"}' },
+      }],
+    }])
+    expect(body.messages[0]).not.toHaveProperty('reasoning_content')
+  })
+
+  it('stops replaying reasoning and sends preserve_thinking: false for a preserveThinking: false model', async () => {
+    const assistant = createAssistantMessage({
+      content: [
+        { type: 'reasoning', text: 'thinking hard' },
+        { type: 'text', text: 'answer' },
+      ],
+      source: { provider: 'qwen-local', model: 'qwen3.8' },
+    })
+    const body = await serializeRequest(
+      options({ messages: [assistant] }),
+      { id: 'qwen3.8', multimodal: false, preserveThinking: false },
+      undefined,
+    )
     expect(body.messages).toEqual([{ role: 'assistant', content: 'answer' }])
+    expect(body.chat_template_kwargs).toEqual({ preserve_thinking: false })
   })
 
   it('expands tool results into role:tool messages with placeholder for empty output', async () => {
@@ -301,6 +348,28 @@ describe('serializeRequest: reasoning effort mapping', () => {
       code = (error as LlmError).failure.code
     }
     expect(code).toBe('UNSUPPORTED_REASONING_EFFORT')
+  })
+
+  it('merges enable_thinking and preserve_thinking kwargs when both deviate from defaults', async () => {
+    const model: QwenLocalModel = {
+      id: 'qwen3.8',
+      multimodal: false,
+      preserveThinking: false,
+      reasoning: {
+        efforts: REASONING_EFFORTS,
+        offMode: 'chat-template-kwargs',
+      },
+    }
+    const body = await serializeRequest(
+      options({ reasoningEffort: ReasoningEffortId('off') }),
+      model,
+      undefined,
+    )
+    expect(body.reasoning_effort).toBeUndefined()
+    expect(body.chat_template_kwargs).toEqual({
+      enable_thinking: false,
+      preserve_thinking: false,
+    })
   })
 
   it('forces session-title auxiliary calls to off', async () => {

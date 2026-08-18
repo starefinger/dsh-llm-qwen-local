@@ -27,8 +27,16 @@ export interface WireRequest {
   stream_options: { include_usage: true }
   /** Selectable-reasoning wire spelling; absent = the deployment's own default. */
   reasoning_effort?: string
-  /** Qwen chat-template switch sent when the selected level is `off`. */
-  chat_template_kwargs?: { enable_thinking: false }
+  /**
+   * Qwen3.8 chat-template switches, each sent only when it deviates from the
+   * template default: `enable_thinking` defaults on (the `off` level turns it
+   * off), `preserve_thinking` defaults on (retains historical thinking
+   * blocks across the conversation).
+   */
+  chat_template_kwargs?: {
+    enable_thinking?: false
+    preserve_thinking?: false
+  }
   tools?: WireTool[]
   temperature?: number
   max_tokens?: number
@@ -75,12 +83,15 @@ export interface WireToolMessage {
 
 /**
  * Assistant-role history message. Text-less turns send `""` (never null):
- * pure tool-call turns replay `content: ""` plus `tool_calls`.
+ * pure tool-call turns replay `content: ""` plus `tool_calls`. With
+ * `preserve_thinking` at its template default (ON), tool-call-free turns
+ * replay their thinking as `reasoning_content`.
  */
 export interface WireAssistantMessage {
   role: 'assistant'
   content: string
   tool_calls?: WireToolCall[]
+  reasoning_content?: string
 }
 
 /** One entry of the request `messages` array, discriminated on `role`. */
@@ -130,6 +141,12 @@ export interface WireDelta {
   content?: string | null
   /** Qwen thinking channel. May arrive as an empty string on the first chunk. */
   reasoning_content?: string | null
+  /**
+   * Alternate thinking-channel spelling some frameworks emit (the official
+   * Qwen3.8 example reads both); vLLM with `--reasoning-parser qwen3` emits
+   * `reasoning_content`.
+   */
+  reasoning?: string | null
   tool_calls?: WireToolCallDelta[]
 }
 

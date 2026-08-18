@@ -19,8 +19,8 @@
  *           efforts:
  *             - { id: off, wire: null }
  *             - { id: low, wire: low }
- *             - { id: high, wire: high }
- *           defaultEffort: high
+ *             - { id: xhigh, wire: xhigh }
+ *           defaultEffort: xhigh
  * ```
  *
  * @module dsh-llm-qwen-local

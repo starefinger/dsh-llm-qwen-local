@@ -96,15 +96,18 @@ const BASE_CONFIG: Config = {
   baseURL: 'http://127.0.0.1:0/v1',
   apiKeyEnv: undefined,
   models: [{
+    // Qwen3.8-27B: native vision-language model, thinking on by default,
+    // official effort levels xhigh (default) / medium / low.
     id: 'qwen3.8',
-    multimodal: false,
+    multimodal: true,
     reasoning: {
       efforts: [
         { id: 'off', wire: null },
         { id: 'low', wire: 'low' },
-        { id: 'high', wire: 'high' },
+        { id: 'medium', wire: 'medium' },
+        { id: 'xhigh', wire: 'xhigh' },
       ],
-      defaultEffort: 'high',
+      defaultEffort: 'xhigh',
       offMode: 'chat-template-kwargs',
     },
   }],
@@ -185,7 +188,7 @@ describe('QwenLocalAdapter e2e (mock vLLM)', () => {
       const chunks = await drain(adapter.stream(options()))
       const finish = chunks.at(-1)
       expect(finish).toEqual({ type: 'finish', reason: { kind: 'stop' } })
-      expect(mock.requests[0]?.body).toMatchObject({ reasoning_effort: 'high' })
+      expect(mock.requests[0]?.body).toMatchObject({ reasoning_effort: 'xhigh' })
       expect(mock.requests[0]?.headers['authorization']).toBe('Bearer test-key-123')
       await mock.close()
     } finally {
@@ -338,7 +341,11 @@ describe('QwenLocalAdapter e2e (mock vLLM)', () => {
     const denied = tracked(await startMockVllm(() => {
       throw new Error('must not be reached')
     }))
-    const textAdapter = adapterFor({ ...BASE_CONFIG, baseURL: denied.url }, () => store)
+    const textAdapter = adapterFor({
+      ...BASE_CONFIG,
+      baseURL: denied.url,
+      models: [{ id: 'qwen3.8', multimodal: false }],
+    }, () => store)
     let code = ''
     try {
       await drain(textAdapter.stream(options({ messages: [imageMessage] })))

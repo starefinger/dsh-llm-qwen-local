@@ -60,6 +60,17 @@ describe('translate', () => {
     expect(finish).toEqual({ type: 'finish', reason: { kind: 'stop' } })
   })
 
+  it('falls back to the delta.reasoning channel some frameworks emit', async () => {
+    const chunks = await collect(done([
+      { choices: [{ delta: { reasoning: 'hm' } }] },
+      { choices: [{ delta: { reasoning: 'mm' } }] },
+      { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] },
+    ]))
+    expect(chunks).toContainEqual({ type: 'block-start', index: 0, blockType: 'reasoning' })
+    expect(chunks).toContainEqual({ type: 'reasoning-delta', index: 0, text: 'hm' })
+    expect(chunks).toContainEqual({ type: 'block-end', index: 0, block: { type: 'reasoning', text: 'hmmm' } })
+  })
+
   it('subtracts cached prompt tokens to keep counts disjoint', async () => {
     const chunks = await collect(done([
       { choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] },

@@ -12,17 +12,24 @@
  *
  * Reasoning policy: the selected effort (`GenerateOptions.reasoningEffort`,
  * else the model's configured `defaultEffort`) maps through the model's
- * configured effort table to a wire `reasoning_effort` spelling. The `off`
- * level (wire `null`) sends nothing and additionally expresses
+ * configured effort table to a wire `reasoning_effort` spelling
+ * (Qwen3.8-27B's official levels: `xhigh` (default), `medium`, `low`). The
+ * `off` level (wire `null`) sends nothing and additionally expresses
  * `offMode`: `chat-template-kwargs` appends
- * `chat_template_kwargs: { enable_thinking: false }` for the vLLM Qwen chat
- * template; `omit` appends nothing. `session-title` auxiliary calls are
- * forced to `off`: a short title never needs thinking.
+ * `chat_template_kwargs: { enable_thinking: false }` (the model's documented
+ * non-thinking mode; thinking is ON by default); `omit` appends nothing.
+ * `session-title` auxiliary calls are forced to `off`: a short title never
+ * needs thinking.
  *
- * History replay: assistant reasoning blocks are dropped at the wire
- * boundary (the Qwen chat template has no reasoning passback field); tool
- * results become `role: 'tool'` messages with text-only content (an image
- * inside a tool result is refused, not silently erased).
+ * Preserved thinking: Qwen3.8 retains thinking blocks from historical
+ * messages by default (`preserve_thinking` ON). The adapter replays assistant
+ * reasoning as `reasoning_content` on tool-call-free history turns — the
+ * shape the official Qwen3.8 example reconstructs — and sends
+ * `chat_template_kwargs: { preserve_thinking: false }` when the model entry
+ * sets `preserveThinking: false` (in which case no reasoning is replayed).
+ *
+ * History replay: tool results become `role: 'tool'` messages with text-only
+ * content (an image inside a tool result is refused, not silently erased).
  *
  * @module dsh-llm-qwen-local/serialize
  */
@@ -38,17 +45,21 @@ export function unlistedModel(id: string): QwenLocalModel {
   return { id, multimodal: false }
 }
 
-/** The wire fields one resolved reasoning effort contributes. */
-interface ResolvedEffort {
+/** The request-level wire control fields one resolved model contributes. */
+interface ResolvedWireControl {
   reasoningEffort?: string
-  enableThinkingOff?: boolean
+  chatTemplateKwargs?: { enable_thinking?: false; preserve_thinking?: false }
 }
 
 /**
- * Map the selected (or configured-default) effort to wire fields.
+ * Map the selected (or configured-default) effort and the model's
+ * `preserveThinking` flag to wire control fields. Only kwargs that deviate
+ * from the template defaults (both on) are sent.
  * @throws LlmError `UNSUPPORTED_REASONING_EFFORT` for a level the model does not declare.
  */
-function resolveEffort(options: GenerateOptions, model: QwenLocalModel): ResolvedEffort {
+function resolveWireControl(options: GenerateOptions, model: QwenLocalModel): ResolvedWireControl {
+  const kwargs: { enable_thinking?: false; preserve_thinking?: false } = {}
+  if (model.preserveThinking === false) kwargs.preserve_thinking = false
   const reasoning: QwenLocalReasoning | undefined = model.reasoning
   if (reasoning === undefined) {
     if (options.reasoningEffort !== undefined) {
@@ -57,13 +68,15 @@ function resolveEffort(options: GenerateOptions, model: QwenLocalModel): Resolve
         'UNSUPPORTED_REASONING_EFFORT',
       )
     }
-    return {}
+    return Object.keys(kwargs).length > 0 ? { chatTemplateKwargs: kwargs } : {}
   }
   // A short title must be produced fast and visible: force the off level.
   const selected = options.purpose === 'session-title'
     ? 'off'
     : options.reasoningEffort ?? reasoning.defaultEffort
-  if (selected === undefined) return {}
+  if (selected === undefined) {
+    return Object.keys(kwargs).length > 0 ? { chatTemplateKwargs: kwargs } : {}
+  }
   const effort = reasoning.efforts.find(entry => entry.id === selected)
   if (effort === undefined) {
     throw new LlmError(
@@ -72,11 +85,13 @@ function resolveEffort(options: GenerateOptions, model: QwenLocalModel): Resolve
     )
   }
   if (effort.wire === null) {
-    return reasoning.offMode === 'chat-template-kwargs'
-      ? { enableThinkingOff: true }
-      : {}
+    if (reasoning.offMode === 'chat-template-kwargs') kwargs.enable_thinking = false
+    return Object.keys(kwargs).length > 0 ? { chatTemplateKwargs: kwargs } : {}
   }
-  return { reasoningEffort: effort.wire }
+  return {
+    reasoningEffort: effort.wire,
+    ...(Object.keys(kwargs).length > 0 ? { chatTemplateKwargs: kwargs } : {}),
+  }
 }
 
 /** Join the text blocks of a content list. */
@@ -124,10 +139,21 @@ async function serializeParts(
   return parts
 }
 
-/** Serialize one assistant history message (text + tool calls; reasoning dropped). */
+/**
+ * Serialize one assistant history message. With `preserve_thinking` at its
+ * template default (ON), assistant reasoning is replayed as
+ * `reasoning_content` on tool-call-free turns — the exact reconstruction the
+ * official Qwen3.8 example performs (`if not has_tool_calls:
+ * msg['reasoning_content'] = thinking`). Tool-call turns and
+ * `preserveThinking: false` models send no reasoning.
+ */
 function serializeAssistant(message: Message, model: QwenLocalModel): WireMessage {
   assertNoImage(message.content, model, 'in assistant history')
   const text = flattenText(message.content)
+  const reasoning = message.content
+    .filter(block => block.type === 'reasoning')
+    .map(block => block.text)
+    .join('')
   const toolCalls = message.content
     .filter(block => block.type === 'tool-call')
     .map(block => ({
@@ -141,6 +167,9 @@ function serializeAssistant(message: Message, model: QwenLocalModel): WireMessag
     // content: "" plus tool_calls, and some gateways reject null outright.
     content: text,
     ...toolCalls.length > 0 ? { tool_calls: toolCalls } : {},
+    ...toolCalls.length === 0 && reasoning.length > 0 && model.preserveThinking !== false
+      ? { reasoning_content: reasoning }
+      : {},
   }
 }
 
@@ -241,15 +270,15 @@ export async function serializeRequest(
         parameters: tool.parameters,
       },
     }))
-  const effort = resolveEffort(options, model)
+  const control = resolveWireControl(options, model)
 
   return {
     model: options.model,
     messages,
     stream: true,
     stream_options: { include_usage: true },
-    ...effort.reasoningEffort !== undefined ? { reasoning_effort: effort.reasoningEffort } : {},
-    ...effort.enableThinkingOff ? { chat_template_kwargs: { enable_thinking: false } } : {},
+    ...control.reasoningEffort !== undefined ? { reasoning_effort: control.reasoningEffort } : {},
+    ...control.chatTemplateKwargs !== undefined ? { chat_template_kwargs: control.chatTemplateKwargs } : {},
     ...tools !== undefined ? { tools } : {},
     ...options.temperature !== undefined ? { temperature: options.temperature } : {},
     ...options.maxTokens === undefined ? {} : { max_tokens: options.maxTokens },

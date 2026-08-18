@@ -159,8 +159,11 @@ export async function* translate(payloads: AsyncIterable<string>): AsyncGenerato
       const delta = choice.delta
 
       // Reasoning first: the Qwen thinking channel interleaves it before
-      // text. The empty-string first chunk must not open a block.
-      const reasoning = delta?.reasoning_content
+      // text. vLLM (with `--reasoning-parser qwen3`) emits
+      // `reasoning_content`; some frameworks emit `reasoning` — the official
+      // Qwen3.8 example reads both. The empty-string first chunk must not
+      // open a block.
+      const reasoning = delta?.reasoning_content ?? delta?.reasoning
       if (typeof reasoning === 'string' && reasoning.length > 0) {
         if (!reasoningBlock) {
           reasoningBlock = open('reasoning')

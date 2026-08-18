@@ -21,8 +21,8 @@ Two deployment-specific knobs are first-class:
             - { id: off, wire: null }
             - { id: low, wire: low }
             - { id: medium, wire: medium }
-            - { id: high, wire: high }
-          defaultEffort: high
+            - { id: xhigh, wire: xhigh }
+          defaultEffort: xhigh
 ```
 
 ## Requirements
@@ -70,7 +70,8 @@ All fields except `models` are optional in `cordis.yml`; schema defaults fill th
 | `description` | — | Selector detail for similar variants. |
 | `contextWindow` | route default | This model's combined request/response capacity. |
 | `maxTokens` | route default | This model's per-request output cap. |
-| `multimodal` | `false` | The vision switch (below). |
+| `multimodal` | `false` | The vision switch (below). Qwen3.8-27B is a native vision-language model — set `true` for it. |
+| `preserveThinking` | `true` | Whether the deployment keeps historical thinking blocks (Qwen3.8's `preserve_thinking`, template default on). `false` sends `chat_template_kwargs: { preserve_thinking: false }` and the adapter stops replaying assistant reasoning into history. |
 | `reasoning` | — | Reasoning capability; absent = the model exposes no selectable efforts. |
 
 ### The multimodal switch
@@ -96,22 +97,39 @@ reasoning:
   offMode: chat-template-kwargs    # optional; 'chat-template-kwargs' | 'omit'
 ```
 
+- **Qwen3.8-27B's official levels**: `xhigh` (the model's default), `medium`, `low` — the bundle baseline declares exactly these plus `off`. Thinking is ON by default, so omitting the parameter entirely (no `defaultEffort`, or `offMode: omit` without an effort) keeps the deployment's thinking default.
 - `efforts` (required, display order) — the authoritative selectable list. Each `id` is an opaque value the harness carries per request; `name` (default `id`) is what selectors show. A level not declared is not offered. `id` is unique per model and **exactly one `off` must be declared**.
 - `wire` — the exact spelling sent as `reasoning_effort`. Only `off` may use `null` (send nothing); every other level must name a non-empty wire value. Rename freely (`{ id: max, wire: high }`) — the harness never sees wire spellings.
 - `defaultEffort` — materialized into requests when the caller omits an effort. Absent preserves vLLM's own default.
 - `offMode` — how `off` is expressed beyond omitting `reasoning_effort`:
-  - `chat-template-kwargs` (default): also sends `chat_template_kwargs: { enable_thinking: false }` — what the vLLM Qwen chat template needs to actually stop thinking (omitting the parameter alone keeps the template's thinking default).
+  - `chat-template-kwargs` (default): also sends `chat_template_kwargs: { enable_thinking: false }` — the model's documented non-thinking mode (thinking is ON by default, so omitting the parameter alone keeps it on).
   - `omit`: sends nothing extra — use for deployments where absence of `reasoning_effort` already means no thinking.
 - Per-request selection takes precedence over `defaultEffort`. A request naming a level the model does not declare fails with `UNSUPPORTED_REASONING_EFFORT` before any network I/O — never clamped.
 - `session-title` auxiliary calls are forced to `off`: a short title never needs thinking.
 
-## Wire dialect (vLLM + Qwen3)
+## Wire dialect (vLLM + Qwen3.8)
 
-Request: `model`, `messages` (system first; multimodal user messages as `content` part arrays; tool results as `role: 'tool'`), `tools`, `stream: true`, `stream_options: { include_usage: true }`, plus the effort fields, `temperature`, `max_tokens`, `stop` when set.
+Request: `model`, `messages` (system first; multimodal user messages as `content` part arrays of `text` / `image_url` data-URL parts; tool results as `role: 'tool'`), `tools`, `stream: true`, `stream_options: { include_usage: true }`, plus `reasoning_effort` and `chat_template_kwargs` when they deviate from template defaults, `temperature`, `max_tokens`, `stop` when set.
 
-Response: SSE `data:` payloads, `data: [DONE]` sentinel. `delta.reasoning_content` → harness `reasoning` blocks (Qwen thinking channel); `delta.content` → `text` blocks; `delta.tool_calls` → `tool-call` blocks with raw-JSON `argumentsDelta`. `finish_reason`: `stop`/`content_filter` → `stop`, `length` → `max-tokens`, `tool_calls` → `tool-calls`, anything else → an `error` finish. Usage arrives attached to the finish chunk and/or as a trailing usage-only chunk; both are buffered and flushed after all `block-end`s and before `finish` (nothing is emitted after `finish`).
+Response: SSE `data:` payloads, `data: [DONE]` sentinel. `delta.reasoning_content` (and the `delta.reasoning` spelling some frameworks emit) → harness `reasoning` blocks (Qwen thinking channel); `delta.content` → `text` blocks; `delta.tool_calls` → `tool-call` blocks with raw-JSON `argumentsDelta`. `finish_reason`: `stop`/`content_filter` → `stop`, `length` → `max-tokens`, `tool_calls` → `tool-calls`, anything else → an `error` finish. Usage arrives attached to the finish chunk and/or as a trailing usage-only chunk; both are buffered and flushed after all `block-end`s and before `finish` (nothing is emitted after `finish`).
 
-History replay: assistant reasoning blocks are **dropped at the wire boundary** (the Qwen chat template has no reasoning passback field); tool calls replay as `tool_calls` with `content: ""` (never `null`).
+History replay: with `preserve_thinking` at its template default (ON), assistant reasoning is replayed as `reasoning_content` on tool-call-free turns — the exact reconstruction the official Qwen3.8 example performs; tool-call turns and `preserveThinking: false` models send no reasoning. Tool calls replay as `tool_calls` with `content: ""` (never `null`).
+
+## Model parameters (Qwen3.8-27B, verified against the model card)
+
+| Fact | Value | Where it lands in this plugin |
+|---|---|---|
+| Architecture | `Qwen3_5ForConditionalGeneration` — **native vision-language model** (image + video) | baseline `multimodal: true` |
+| Context length | **262,144 native**, extensible to ~1M via YaRN / `--max-model-len` | `DEFAULT_CONTEXT_WINDOW = 262144`; raise `contextWindow` per model when your vLLM runs 1M |
+| Thinking default | **ON**; disable per request with `chat_template_kwargs: { enable_thinking: false }` | `off` level + `offMode: chat-template-kwargs` (default) |
+| `reasoning_effort` levels | **`xhigh` (default), `medium`, `low`** | baseline `efforts` + `defaultEffort: xhigh` |
+| `preserve_thinking` | **ON by default**; retains historical thinking blocks | reasoning replay as `reasoning_content`; `preserveThinking: false` sends the kwarg |
+| Recommended sampling | thinking: `temperature=1.0, top_p=0.95, top_k=20`; non-thinking: `temperature=0.7, top_p=0.8, top_k=20, presence_penalty=1.5` | only `temperature` is harness-exposable; the rest rides your deployment defaults (vLLM's generation defaults match the thinking set) |
+| Recommended output budget | reasoning 262,144 / final 131,072 when split limits are available on a 1M context | `maxTokens` per model / per request |
+| Images | `image_url` parts (URL or data URL) | `multimodal: true` path (data URL inlined) |
+| Video | `video_url` parts | not supported — the harness has no video content block |
+
+**Required vLLM serve flags** (per the official vLLM recipe): `--reasoning-parser qwen3` is effectively mandatory — without it the whole reasoning block lands in `message.content` — plus `--enable-auto-tool-choice --tool-call-parser qwen3_coder` for tool calling and `--max-model-len 262144` (or higher).
 
 ## Error paths
 
@@ -135,7 +153,8 @@ Tests run against a scripted in-process vLLM (SSE) mock — no real model or end
 
 - **A modality declaration is not verified** — `multimodal: true` on a text-only endpoint fails mid-turn after the image message is durable (recovery: new session / fork / other model).
 - **No image inside tool results** — vLLM `role: 'tool'` content is text-only; an image there is refused with `UNSUPPORTED_CONTENT`.
-- **No `replayState`** — the endpoint is stateless and history replays cleanly from recorded blocks, so the adapter emits no adapter-private replay metadata.
+- **No `replayState`** — the endpoint is stateless and history replays cleanly from recorded blocks (reasoning included, via `preserve_thinking`), so the adapter emits no adapter-private replay metadata.
 - **No per-route retry policy** — v1 has no `retryPolicy` config; the harness normal defaults apply.
-- **`reasoning_content` is assumed** — the thinking channel name follows the vLLM Qwen dialect; a deployment that streams thinking elsewhere would need the delta field renamed in `translate.ts`.
+- **Thinking replay is tool-call-turn-free only** — reasoning is replayed as `reasoning_content` only on assistant turns with no tool calls (the official Qwen3.8 example's shape); a deployment that wants thinking retained across tool-call turns needs a template-level change.
+- **Video input is unsupported** — Qwen3.8-27B accepts `video_url` parts, but the harness has no video content block, so only `image` is wired; a deployment that needs video would need a new harness content block plus a `video_url` serializer path.
 - **Assistant-side images are rejected** — the harness image block is user-content-only in practice; assistant/tool/system image content is refused rather than silently erased.
