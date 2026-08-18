@@ -131,6 +131,28 @@ History replay: with `preserve_thinking` at its template default (ON), assistant
 
 **Required vLLM serve flags** (per the official vLLM recipe): `--reasoning-parser qwen3` is effectively mandatory — without it the whole reasoning block lands in `message.content` — plus `--enable-auto-tool-choice --tool-call-parser qwen3_coder` for tool calling and `--max-model-len 262144` (or higher).
 
+## Framework compatibility
+
+Every wire field the adapter sends or reads, and where it comes from:
+
+| Field | Origin | vLLM | SGLang | llama.cpp / Ollama |
+|---|---|---|---|---|
+| `model`/`messages`/`stream`/`stream_options` | OpenAI standard | yes | yes | yes |
+| `temperature`/`max_tokens`/`stop` | OpenAI standard | yes | yes | yes |
+| `tools`/`tool_calls` | OpenAI standard | yes | yes | yes |
+| `image_url` (data URL) | OpenAI standard | yes | yes | VL builds |
+| `reasoning_effort` | OpenAI-family, documented by Qwen | yes | yes | no (ignored or 400) |
+| `chat_template_kwargs` | **vLLM extension** | yes | yes | no |
+| `delta.reasoning_content` (+ `reasoning` fallback) | Qwen template dialect, not framework-bound | `--reasoning-parser qwen3` | Qwen3 parser | `--reasoning-format deepseek` |
+| `usage` (detail fields optional) | OpenAI standard | yes | yes | tolerated when absent |
+
+The only vLLM-specific extension is `chat_template_kwargs`, and it appears in exactly two configurable places: `offMode: chat-template-kwargs` and `preserveThinking: false`. Everything else is OpenAI-standard or **Qwen template-level** (`enable_thinking`, `preserve_thinking`, the `reasoning_content` channel are the model's chat-template vocabulary, so any framework that implements the Qwen3.8 template correctly understands them).
+
+- **vLLM** — full compatibility; the default config is written for it.
+- **SGLang** — the default config should work as-is (it supports `chat_template_kwargs.enable_thinking` and reasoning effort); launch with the equivalent reasoning-parser flags.
+- **llama.cpp / Ollama** — partial: the standard path (text/tools/images) works. `chat_template_kwargs` is not understood → set `offMode: omit` (`off` then only omits the parameter; thinking cannot be disabled per request). `reasoning_effort` is not understood → declare no `reasoning` block. Thinking streams are separable only when the server emits `reasoning_content` (llama.cpp: `--reasoning-format deepseek`).
+- **DashScope / Qwen Cloud** — not supported: its OpenAI-compatible endpoint takes `enable_thinking` as a **top-level** parameter, not inside `chat_template_kwargs`, and this adapter has no knob for top-level template variables. A per-effort extra-params design would be needed; out of scope for v1 (the adapter targets local OpenAI-compatible servers).
+
 ## Error paths
 
 - **Thrown from `stream()`** (transport/protocol failures): fetch failure or `TRANSPORT`; non-2xx mapped to `AUTH`/`RATE_LIMIT`/`INVALID_REQUEST`/`SERVER`/`HTTP_<n>` (with `status`, `retry-after`, request id when present); malformed SSE payload `MALFORMED_RESPONSE`; truncation without `[DONE]` `STREAM_CLOSED`; idle timeout `TIMEOUT`; caller abort `ABORTED`; image/content gates `UNSUPPORTED_CONTENT`; unknown effort `UNSUPPORTED_REASONING_EFFORT`.
