@@ -98,7 +98,7 @@ reasoning:
 ```
 
 - **Qwen3.8-27B's official levels**: `xhigh` (the model's default), `medium`, `low` — the bundle baseline declares exactly these plus `off`. Thinking is ON by default, so omitting the parameter entirely (no `defaultEffort`, or `offMode: omit` without an effort) keeps the deployment's thinking default.
-- `efforts` (required, display order) — the authoritative selectable list. Each `id` is an opaque value the harness carries per request; `name` (default `id`) is what selectors show. A level not declared is not offered. `id` is unique per model and **exactly one `off` must be declared**.
+- `efforts` (required, display order) — the authoritative selectable list. Each `id` is an opaque value the harness carries per request; `name` (default `id`) is what selectors show. A level not declared is not offered. `id` is unique per model. The `off` level is **optional**: it is the adapter's own "no thinking" selector, not a wire value (selecting it sends no `reasoning_effort` at all). Omit it for a deployment with no way to disable thinking — then effort selection can never turn thinking off, and `session-title` calls keep the ordinary default instead of forcing `off`.
 - `wire` — the exact spelling sent as `reasoning_effort`. Only `off` may use `null` (send nothing); every other level must name a non-empty wire value. Rename freely (`{ id: max, wire: high }`) — the harness never sees wire spellings.
 - `defaultEffort` — materialized into requests when the caller omits an effort. Absent preserves vLLM's own default.
 - `offMode` — how `off` is expressed beyond omitting `reasoning_effort`:

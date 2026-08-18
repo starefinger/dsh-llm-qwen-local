@@ -70,8 +70,11 @@ function resolveWireControl(options: GenerateOptions, model: QwenLocalModel): Re
     }
     return Object.keys(kwargs).length > 0 ? { chatTemplateKwargs: kwargs } : {}
   }
-  // A short title must be produced fast and visible: force the off level.
-  const selected = options.purpose === 'session-title'
+  // A short title must be produced fast and visible: force the off level —
+  // only when the model actually declares one; a model without `off` cannot
+  // disable thinking at all, so the title call keeps the ordinary default.
+  const hasOff = reasoning.efforts.some(entry => entry.id === 'off')
+  const selected = options.purpose === 'session-title' && hasOff
     ? 'off'
     : options.reasoningEffort ?? reasoning.defaultEffort
   if (selected === undefined) {

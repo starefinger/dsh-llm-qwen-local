@@ -372,7 +372,7 @@ describe('serializeRequest: reasoning effort mapping', () => {
     })
   })
 
-  it('forces session-title auxiliary calls to off', async () => {
+  it('forces session-title auxiliary calls to off when the model declares it', async () => {
     const body = await serializeRequest(
       options({ purpose: 'session-title' }),
       REASONING_MODEL,
@@ -380,6 +380,42 @@ describe('serializeRequest: reasoning effort mapping', () => {
     )
     expect(body.reasoning_effort).toBeUndefined()
     expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
+  })
+
+  it('leaves session-title calls at the ordinary default when the model declares no off level', async () => {
+    const noOff: QwenLocalModel = {
+      id: 'qwen3.8',
+      multimodal: false,
+      reasoning: {
+        efforts: [
+          { id: 'low', wire: 'low' },
+          { id: 'xhigh', wire: 'xhigh' },
+        ],
+        defaultEffort: 'xhigh',
+        offMode: 'chat-template-kwargs',
+      },
+    }
+    const body = await serializeRequest(options({ purpose: 'session-title' }), noOff, undefined)
+    expect(body.reasoning_effort).toBe('xhigh')
+    expect(body.chat_template_kwargs).toBeUndefined()
+  })
+
+  it('defensively refuses an explicit off request against a model with no off level', async () => {
+    const noOff: QwenLocalModel = {
+      id: 'qwen3.8',
+      multimodal: false,
+      reasoning: {
+        efforts: [{ id: 'xhigh', wire: 'xhigh' }],
+        offMode: 'chat-template-kwargs',
+      },
+    }
+    let code = ''
+    try {
+      await serializeRequest(options({ reasoningEffort: ReasoningEffortId('off') }), noOff, undefined)
+    } catch (error) {
+      code = (error as LlmError).failure.code
+    }
+    expect(code).toBe('UNSUPPORTED_REASONING_EFFORT')
   })
 })
 

@@ -42,7 +42,13 @@ export interface QwenLocalReasoningEffort {
 
 /** Configured reasoning capability of one model. */
 export interface QwenLocalReasoning {
-  /** Selectable levels in display order; must contain exactly one `off`. */
+  /**
+   * Selectable levels in display order. `off` is OPTIONAL (0 or 1 entry; the
+   * unique-id rule caps it at one): it is the adapter's own "no thinking"
+   * selector level, not a wire value — selecting it sends no
+   * `reasoning_effort` at all. Omit it for deployments with no way to disable
+   * thinking.
+   */
   efforts: QwenLocalReasoningEffort[]
   /** Default level materialized when callers omit an effort; absent = provider default. */
   defaultEffort?: string
@@ -168,12 +174,10 @@ const PKG = 'dsh-llm-qwen-local'
 /** Validate one effort list and materialize display names. */
 function resolveReasoning(raw: QwenLocalReasoning, modelId: string): QwenLocalReasoning {
   const seen = new Set<string>()
-  let offCount = 0
   const efforts = raw.efforts.map(effort => {
     if (effort.id.length === 0) throw new Error(`${PKG}: model "${modelId}" declares an effort with an empty id`)
     if (seen.has(effort.id)) throw new Error(`${PKG}: model "${modelId}" declares duplicate reasoning effort "${effort.id}"`)
     seen.add(effort.id)
-    if (effort.id === 'off') offCount += 1
     if (effort.wire === null && effort.id !== 'off') {
       throw new Error(
         `${PKG}: model "${modelId}" effort "${effort.id}" may not use a null wire; only "off" sends nothing`,
@@ -190,11 +194,9 @@ function resolveReasoning(raw: QwenLocalReasoning, modelId: string): QwenLocalRe
       wire: effort.wire,
     }
   })
-  if (offCount !== 1) {
-    throw new Error(
-      `${PKG}: model "${modelId}" reasoning efforts must declare exactly one "off" level (found ${offCount})`,
-    )
-  }
+  // `off` is optional: 0 or 1 (the duplicate-id check above already caps it
+  // at one). A model without `off` simply cannot disable thinking via effort
+  // selection.
   if (raw.defaultEffort !== undefined && !seen.has(raw.defaultEffort)) {
     throw new Error(
       `${PKG}: model "${modelId}" defaultEffort "${raw.defaultEffort}" is not among its declared efforts`,
