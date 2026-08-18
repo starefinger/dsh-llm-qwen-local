@@ -155,37 +155,67 @@ The only vLLM-specific extension is `chat_template_kwargs`, and it appears in ex
 
 ## Frontend configuration (web Models page / settings)
 
-The plugin wires the four hooks DSH's configuration surfaces consume (the same
-ones `llm-deepseek` and `llm-pi-ai` use):
+Frontend configuration is split across two faces: a **node half** that wires
+the four hooks DSH's configuration surfaces consume (the same ones
+`llm-deepseek` and `llm-pi-ai` use) and a **client half** that renders the
+editable page.
+
+Node half (the configuration surface the host exposes):
 
 - **Settings section** — the plugin's `Config` schema is installed as the
-  `llm-qwen-local` user-settings section (`installSettingsSection`), so the
-  web settings surface renders an editable form for the whole provider:
-  `baseURL`, the model list (id / name / capacities / multimodal /
-  `preserveThinking` / reasoning efforts), and the credential reference.
-  Commits switch the configuration source **live** — the adapter re-resolves
-  per request, so a saved change reaches the next model call without a
-  restart. Unserviceable sections are refused where they are written.
+  `llm-qwen-local` user-settings section (`installSettingsSection`). This
+  makes the section the host's single fact source: it is readable and
+  writable through the settings RPC (`settings.describe` /
+  `settings.replace`) and `settings.yaml`. Commits switch the configuration
+  source **live** — the adapter re-resolves per request, so a saved change
+  reaches the next model call without a restart. Unserviceable sections are
+  refused where they are written. This half alone does *not* paint a page —
+  the web settings modal renders only pages a client plugin registers into
+  the `settings.section` slot.
 - **Configurable-provider directory** — the `qwen-local` route is registered
-  via `registerConfigurableProviders`, so the web Models page offers it as a
-  row (live or dormant) that links into the settings section.
-- **Model discovery** — `registerModelDiscovery` lets the Models page
-  prefill the catalog from a live deployment: a draft naming a `baseURL`
-  triggers a `GET {baseURL}/models` probe (the draft's one-off key, else the
-  route's stored credential, else unauthenticated); a draft naming the route
-  but no endpoint is answered from the configured catalog with no network
-  call.
+  via `registerConfigurableProviders`, so the web Models page lists it as a
+  row (live or dormant). Its namespace is also what makes the settings RPC
+  expose `llm-qwen-local` to configuration clients.
+- **Model discovery** — `registerModelDiscovery` answers
+  `llm.discoverModels`: a draft naming a `baseURL` triggers a
+  `GET {baseURL}/models` probe (the draft's one-off key, else the route's
+  stored credential, else unauthenticated); a draft naming the route but no
+  endpoint is answered from the configured catalog with no network call.
 - **Credentials** — a named `apiKeyEnv` resolves through the durable
   credentials service first (what the web Models page writes keys into),
   then the launch environment. A miss fails loud with `MISSING_CREDENTIAL`
   rather than letting the deployment pick up an unrelated ambient key.
 
+Client half (the page you actually edit):
+
+- `src/client` is a **client plugin** (declared under `dsh.client`, exported
+  as `./client`, built to a module-table bundle `lib/client.js`). It
+  registers a `Qwen 本地 (vLLM)` page into the settings modal's
+  `settings.section` slot and renders one form over the `llm-qwen-local`
+  section: `baseURL`, the API-key env var, the model list (id / name /
+  capacities / multimodal / `preserveThinking` / reasoning efforts), a
+  **Discover models** button (probes the draft endpoint via
+  `llm.discoverModels` and merges the ids), and **Save** (writes the whole
+  section via `settings.replace`). The host validates the draft against the
+  schema and answers the redacted value back; a schema violation is surfaced
+  inline. Copy is bilingual (zh/en) through the DSH locale registry, and the
+  page refetches on `settings/document-updated` so two open surfaces
+  converge.
+- The bundle requires only the platform `react` / `react/jsx-runtime`
+  modules — every DSH type import is type-only and erased, and all services
+  arrive through the injected `slots` / `locale` / `connection` / `remote`
+  faces. `pnpm build` typechecks both halves and emits `lib/client.js`
+  alongside `lib/`.
+
 Scope note: the Models page's *curated* per-family editor cards (the
 baseURL/key/model-catalog forms) are hand-written in the `ui-settings-models`
-client package for the `llm-deepseek` and `llm-pi-ai` namespaces; this plugin
-gets the generic schema-driven settings form plus the directory row and the
-discovery hook. A dedicated Qwen card would be a `ui-settings-models`
-contribution, not a plugin-side change.
+client package for the `llm-deepseek` and `llm-pi-ai` namespaces only. A route
+outside those families is listed on the Models page but renders the generic
+"edit the rest in settings.yaml" hint — the Models page has no slot for a
+third-party editor card. The editable surface this plugin ships is therefore
+the dedicated **settings page**, not a Models-page card. A dedicated Models
+card would be a `ui-settings-models` core contribution, not a plugin-side
+change.
 
 ## Error paths
 

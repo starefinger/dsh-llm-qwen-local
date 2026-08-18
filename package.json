@@ -1,7 +1,7 @@
 {
   "name": "dsh-llm-qwen-local",
-  "description": "DeepSeek Harness LLM adapter plugin for locally deployed Qwen models behind a vLLM OpenAI-compatible endpoint: per-model multimodal switch and fully configurable reasoning efforts",
-  "version": "0.1.0",
+  "description": "DeepSeek Harness LLM adapter plugin for locally deployed Qwen models behind a vLLM OpenAI-compatible endpoint: per-model multimodal switch, fully configurable reasoning efforts, and a web settings page (client plugin) for editing the deployment from the frontend",
+  "version": "0.2.0",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -9,21 +9,32 @@
     ".": {
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
-    }
+    },
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
     "lib/index.d.ts",
+    "lib/client.js",
     "cordis.patch.yml"
   ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-connection"
+      ]
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.tests.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
+    "typecheck": "tsc -p tsconfig.tests.json && tsc -p tsconfig.client.json",
     "test": "vitest run"
   },
   "dependencies": {
@@ -40,12 +51,22 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-api-remotes": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-attachment": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-credentials": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-launch-environment": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-settings": "^0.1.0-rc.7",
     "@types/node": "^22.0.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "esbuild": "^0.28.2",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"
   }
