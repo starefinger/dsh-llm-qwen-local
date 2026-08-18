@@ -47,6 +47,15 @@ export interface QwenLocalAdapterOptions {
    * refuses any image with `UNSUPPORTED_CONTENT` rather than guessing a source.
    */
   resolveAttachments?: () => AttachmentStore | undefined
+  /**
+   * Resolve a named credential per request. The registering plugin wires this
+   * to the durable credentials service (what the web Models page writes) with
+   * a launch-environment fallback; a miss must throw `MISSING_CREDENTIAL` —
+   * once a profile names a key, failing loud beats authenticating as the
+   * wrong tenant. Absent (standalone or test use), the adapter reads the
+   * process environment itself.
+   */
+  resolveApiKey?: (ref: string) => Promise<string>
 }
 
 /**
@@ -212,7 +221,11 @@ export class QwenLocalAdapter extends LlmAdapter {
       if (error instanceof LlmError) throw error
       throw new LlmError('qwen-local request serialization failed', 'PROTOCOL', { cause: error })
     }
-    const apiKey = bearerKey(connection)
+    const apiKey = connection.apiKeyEnv === undefined
+      ? undefined
+      : this.config.resolveApiKey !== undefined
+        ? await this.config.resolveApiKey(connection.apiKeyEnv)
+        : bearerKey(connection)
 
     // One stable signal reaches both initial fetch and body reads: the
     // caller's (when present) joined with the idle watchdog's.

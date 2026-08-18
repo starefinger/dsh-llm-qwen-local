@@ -37,7 +37,7 @@
             reasoning:
               efforts:
                 - id: off
-                  wire: null
+                  wire: low
                 - id: low
                   wire: low
                 - id: medium

@@ -153,9 +153,43 @@ The only vLLM-specific extension is `chat_template_kwargs`, and it appears in ex
 - **llama.cpp / Ollama** — partial: the standard path (text/tools/images) works. `chat_template_kwargs` is not understood → set `offMode: omit` (`off` then only omits the parameter; thinking cannot be disabled per request). `reasoning_effort` is not understood → declare no `reasoning` block. Thinking streams are separable only when the server emits `reasoning_content` (llama.cpp: `--reasoning-format deepseek`).
 - **DashScope / Qwen Cloud** — not supported: its OpenAI-compatible endpoint takes `enable_thinking` as a **top-level** parameter, not inside `chat_template_kwargs`, and this adapter has no knob for top-level template variables. A per-effort extra-params design would be needed; out of scope for v1 (the adapter targets local OpenAI-compatible servers).
 
+## Frontend configuration (web Models page / settings)
+
+The plugin wires the four hooks DSH's configuration surfaces consume (the same
+ones `llm-deepseek` and `llm-pi-ai` use):
+
+- **Settings section** — the plugin's `Config` schema is installed as the
+  `llm-qwen-local` user-settings section (`installSettingsSection`), so the
+  web settings surface renders an editable form for the whole provider:
+  `baseURL`, the model list (id / name / capacities / multimodal /
+  `preserveThinking` / reasoning efforts), and the credential reference.
+  Commits switch the configuration source **live** — the adapter re-resolves
+  per request, so a saved change reaches the next model call without a
+  restart. Unserviceable sections are refused where they are written.
+- **Configurable-provider directory** — the `qwen-local` route is registered
+  via `registerConfigurableProviders`, so the web Models page offers it as a
+  row (live or dormant) that links into the settings section.
+- **Model discovery** — `registerModelDiscovery` lets the Models page
+  prefill the catalog from a live deployment: a draft naming a `baseURL`
+  triggers a `GET {baseURL}/models` probe (the draft's one-off key, else the
+  route's stored credential, else unauthenticated); a draft naming the route
+  but no endpoint is answered from the configured catalog with no network
+  call.
+- **Credentials** — a named `apiKeyEnv` resolves through the durable
+  credentials service first (what the web Models page writes keys into),
+  then the launch environment. A miss fails loud with `MISSING_CREDENTIAL`
+  rather than letting the deployment pick up an unrelated ambient key.
+
+Scope note: the Models page's *curated* per-family editor cards (the
+baseURL/key/model-catalog forms) are hand-written in the `ui-settings-models`
+client package for the `llm-deepseek` and `llm-pi-ai` namespaces; this plugin
+gets the generic schema-driven settings form plus the directory row and the
+discovery hook. A dedicated Qwen card would be a `ui-settings-models`
+contribution, not a plugin-side change.
+
 ## Error paths
 
-- **Thrown from `stream()`** (transport/protocol failures): fetch failure or `TRANSPORT`; non-2xx mapped to `AUTH`/`RATE_LIMIT`/`INVALID_REQUEST`/`SERVER`/`HTTP_<n>` (with `status`, `retry-after`, request id when present); malformed SSE payload `MALFORMED_RESPONSE`; truncation without `[DONE]` `STREAM_CLOSED`; idle timeout `TIMEOUT`; caller abort `ABORTED`; image/content gates `UNSUPPORTED_CONTENT`; unknown effort `UNSUPPORTED_REASONING_EFFORT`.
+- **Thrown from `stream()`** (transport/protocol failures): fetch failure or `TRANSPORT`; non-2xx mapped to `AUTH`/`RATE_LIMIT`/`INVALID_REQUEST`/`SERVER`/`HTTP_<n>` (with `status`, `retry-after`, request id when present); malformed SSE payload `MALFORMED_RESPONSE`; truncation without `[DONE]` `STREAM_CLOSED`; idle timeout `TIMEOUT`; caller abort `ABORTED`; image/content gates `UNSUPPORTED_CONTENT`; unknown effort `UNSUPPORTED_REASONING_EFFORT`; a named `apiKeyEnv` that resolves nowhere `MISSING_CREDENTIAL` (before any network I/O).
 - **In-band provider failure**: an SSE payload carrying an `error` object closes open blocks and ends the stream with `finish {kind: 'error', failure: {code: 'PROVIDER_ERROR'}}`.
 - A completed response with no content maps to an `EMPTY_RESPONSE` error finish.
 

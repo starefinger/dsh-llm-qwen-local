@@ -33,12 +33,18 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-attachment": "^0.1.0-rc.7",
-    "@deepseek-ai/dsh-llm": "^0.1.0-rc.7"
+    "@deepseek-ai/dsh-credentials": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-launch-environment": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-settings": "^0.1.0-rc.7"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-attachment": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-credentials": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-launch-environment": "^0.1.0-rc.7",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.7",
+    "@deepseek-ai/dsh-settings": "^0.1.0-rc.7",
     "@types/node": "^22.0.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"

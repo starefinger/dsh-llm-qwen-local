@@ -170,6 +170,59 @@ describe('QwenLocalAdapter e2e (mock vLLM)', () => {
     await mock.close()
   })
 
+  it('resolves a named credential through the plugin resolver (the credentials-service path)', async () => {
+    const mock = tracked(await startMockVllm((res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      frame(res, { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] })
+      frame(res, { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } })
+      frame(res, '[DONE]')
+      res.end()
+    }))
+    const connection = resolveConfig({
+      ...BASE_CONFIG,
+      baseURL: mock.url,
+      apiKeyEnv: 'QWEN_LOCAL_API_KEY',
+    })
+    const seen: string[] = []
+    const adapter = new QwenLocalAdapter({
+      options: () => connection,
+      resolveApiKey: async (ref) => {
+        seen.push(ref)
+        return 'stored-key-456'
+      },
+    })
+    await drain(adapter.stream(options()))
+    expect(seen).toEqual(['QWEN_LOCAL_API_KEY'])
+    expect(mock.requests[0]?.headers['authorization']).toBe('Bearer stored-key-456')
+    await mock.close()
+  })
+
+  it('fails loud with MISSING_CREDENTIAL before any network I/O when the resolver misses', async () => {
+    const denied = tracked(await startMockVllm(() => {
+      throw new Error('must not be reached')
+    }))
+    const connection = resolveConfig({
+      ...BASE_CONFIG,
+      baseURL: denied.url,
+      apiKeyEnv: 'QWEN_LOCAL_API_KEY',
+    })
+    const adapter = new QwenLocalAdapter({
+      options: () => connection,
+      resolveApiKey: async () => {
+        throw new LlmError('no API key for QWEN_LOCAL_API_KEY', 'MISSING_CREDENTIAL')
+      },
+    })
+    let code = ''
+    try {
+      await drain(adapter.stream(options()))
+    } catch (error) {
+      code = error instanceof LlmError ? error.failure.code : 'NOT_LLM_ERROR'
+    }
+    expect(code).toBe('MISSING_CREDENTIAL')
+    expect(denied.requests).toEqual([])
+    await denied.close()
+  })
+
   it('materializes the default effort and sends the bearer key from the named env', async () => {
     process.env.QWEN_TEST_KEY = 'test-key-123'
     try {
