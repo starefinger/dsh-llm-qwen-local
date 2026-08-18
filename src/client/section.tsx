@@ -3,8 +3,13 @@
  * `llm-qwen-local` settings section. The host owns the section through the
  * settings seam; this surface reads the resolved value, edits a local draft,
  * and saves it back with `settings.replace` (the seam validates against the
- * schema and answers a redacted view). Model discovery probes the draft's
- * endpoint through `llm.discoverModels` and merges the ids into the draft.
+ * schema and answers a redacted view). The API key follows the core Models
+ * page convention: the value never enters the settings section — it is
+ * written to the durable credentials service under the provider's derived
+ * ref (`QWEN_LOCAL_API_KEY`), and the section's `apiKeyEnv` field records
+ * that ref name for the adapter's resolver. Model discovery probes the
+ * draft's endpoint through `llm.discoverModels` and merges the ids into the
+ * draft.
  *
  * Styling is inline by design: the client bundle keeps away from the CSS
  * pipeline (no stylesheet route for plugin bundles in the module table), so
@@ -19,6 +24,20 @@ export const SECTION_NS = 'llm-qwen-local'
 
 /** The provider route this section configures (for discovery). */
 export const PROVIDER_ROUTE = 'qwen-local'
+
+/**
+ * The fallback credential ref: the core Models page derives the same name
+ * from the provider id (`deriveKeyRef`), so a key stored here and one
+ * stored from the Models page are interchangeable. A ref the section already
+ * names wins over it (the core's `refFor` convention), so an existing
+ * credential under another name is respected instead of orphaned.
+ */
+export const KEY_REF = 'QWEN_LOCAL_API_KEY'
+
+/** The core `refFor` convention: a named ref in the section wins, else the derived default. */
+function refFor(loadedRef: string): string {
+  return loadedRef.length > 0 ? loadedRef : KEY_REF
+}
 
 /** The pushed-invalidation channel the page listens on (structural subset). */
 export interface RemoteEvents {
@@ -50,6 +69,7 @@ interface PageState {
   revision: number
   draft: ModelDraft[]
   baseURL: string
+  /** The loaded section's `apiKeyEnv` value (a ref or env-var name). */
   apiKeyEnv: string
   /** Pass-through fields the form does not render (idle timeout, defaults). */
   passthrough: Record<string, unknown>
@@ -93,6 +113,7 @@ const css = {
   status: { fontSize: 12 },
   error: { fontSize: 12, color: '#f2a1a1' },
   ok: { fontSize: 12, color: '#a1f2b1' },
+  warn: { fontSize: 12, color: '#f2d9a1' },
   muted: { fontSize: 12, opacity: 0.6 },
   checks: { display: 'flex', gap: 16, fontSize: 12 },
 } as const
@@ -184,11 +205,20 @@ function wireModel(model: ModelDraft): Record<string, unknown> {
   }
 }
 
-/** Serialize the whole draft into the section value for `settings.replace`. */
-function wireSection(state: PageState): Record<string, unknown> {
+type KeyMode = 'new' | 'clear' | 'keep'
+
+/**
+ * Serialize the draft into the section value for `settings.replace`. The
+ * `apiKeyEnv` the section carries: the managed ref after a key store, absent
+ * after a clear, the loaded value untouched otherwise.
+ */
+function wireSection(state: PageState, keyMode: KeyMode): Record<string, unknown> {
   const section: Record<string, unknown> = { ...state.passthrough }
   if (state.baseURL.length > 0) section.baseURL = state.baseURL
-  if (state.apiKeyEnv.length > 0) section.apiKeyEnv = state.apiKeyEnv
+  // A key store pins the effective ref (loaded or derived); a clear drops the
+  // reference; keep leaves whatever the section already names untouched.
+  const ref = keyMode === 'clear' ? undefined : refFor(state.apiKeyEnv)
+  if (ref !== undefined && ref.length > 0) section.apiKeyEnv = ref
   section.models = state.draft.map(wireModel)
   return section
 }
@@ -221,6 +251,11 @@ export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX
   const [discovering, setDiscovering] = useState(false)
   const [discoverNote, setDiscoverNote] = useState<string | undefined>()
   const [discoverError, setDiscoverError] = useState<string | undefined>()
+  // API key: the value only crosses the wire in one direction (set/unset);
+  // the page never reads it back — only whether one is stored under KEY_REF.
+  const [keyDraft, setKeyDraft] = useState('')
+  const [keyStored, setKeyStored] = useState(false)
+  const [keyClear, setKeyClear] = useState(false)
 
   const load = useCallback(async () => {
     setLoadError(undefined)
@@ -233,7 +268,11 @@ export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX
         setPage(undefined)
         return
       }
-      setPage(parsePage(view.value, view.revision))
+      const parsed = parsePage(view.value, view.revision)
+      setPage(parsed)
+      const ref = refFor(parsed.apiKeyEnv)
+      const creds = unwrap(await api.credentials.describe({ refs: [ref] }))
+      setKeyStored(creds.credentials[ref] !== undefined)
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error))
       setPage(undefined)
@@ -329,25 +368,51 @@ export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX
     }
   }, [api, page, t])
 
+  const keyMode: KeyMode = keyClear ? 'clear' : keyDraft.length > 0 ? 'new' : 'keep'
+
   const onSave = useCallback(async () => {
     if (page === undefined) return
     setSaving(true)
     setSaveError(undefined)
     setSaved(false)
     try {
+      // The effective ref is the section's named one (or the derived default);
+      // the credential write goes first: if it succeeds and the settings
+      // replace then conflicts, the section still points at the old ref —
+      // never the reverse (a section pointing at a missing credential).
+      const ref = refFor(page.apiKeyEnv)
+      if (keyClear) {
+        unwrap(await api.credentials.unset({ ref }))
+        setKeyStored(false)
+      } else if (keyDraft.length > 0) {
+        unwrap(await api.credentials.set({ ref, value: keyDraft }))
+        setKeyStored(true)
+      }
       const view = unwrap(await api.settings.replace({
         ns: SECTION_NS,
-        section: wireSection(page),
+        section: wireSection(page, keyMode),
         expectedRevision: page.revision,
       }))
       setPage(parsePage(view.value, view.revision))
+      setKeyDraft('')
+      setKeyClear(false)
       setSaved(true)
     } catch (error) {
       setSaveError(t('saveError', { detail: error instanceof Error ? error.message : String(error) }))
     } finally {
       setSaving(false)
     }
-  }, [api, page, t])
+  }, [api, page, t, keyDraft, keyMode])
+
+  // The ref the key operations target: the section's named one, else the
+  // derived default (the core `refFor` convention).
+  const effectiveRef = page?.apiKeyEnv !== undefined && page.apiKeyEnv.length > 0
+    ? page.apiKeyEnv
+    : KEY_REF
+  // A named ref with no stored credential resolves only through a
+  // launch-environment variable of the same name — say so instead of letting
+  // the endpoint answer 401 without explanation.
+  const unresolvedRef = keyMode === 'keep' && !keyStored && keyDraft.length === 0
 
   const hasAnyReasoning = useMemo(
     () => page?.draft.some(model => model.hasReasoning) ?? false,
@@ -384,15 +449,39 @@ export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX
       </div>
 
       <div style={css.field}>
-        <span style={css.label}>{t('keyEnv')}</span>
+        <div style={css.row}>
+          <span style={css.label}>{t('keyInput')}</span>
+          {keyStored || page.apiKeyEnv.length > 0
+            ? (
+              <button
+                style={{ ...css.button, ...css.danger }}
+                type="button"
+                onClick={() => { setKeyClear(true); setKeyDraft('') }}
+              >
+                {t('keyClear')}
+              </button>
+            )
+            : null}
+        </div>
         <input
           style={css.input}
-          type="text"
-          value={page.apiKeyEnv}
-          placeholder={t('keyEnvPlaceholder')}
-          aria-label={t('keyEnv')}
-          onChange={event => { setPage({ ...page, apiKeyEnv: event.target.value }); setSaved(false) }}
+          type="password"
+          autoComplete="off"
+          value={keyClear ? '' : keyDraft}
+          placeholder={keyClear
+            ? t('keyClearPending')
+            : keyStored
+              ? t('keyStoredPlaceholder')
+              : t('keyNonePlaceholder')}
+          aria-label={t('keyInput')}
+          disabled={keyClear}
+          onChange={event => { setKeyDraft(event.target.value); setKeyClear(false) }}
         />
+        {keyClear
+          ? <span style={css.warn}>{t('keyClearNote')}</span>
+          : unresolvedRef
+            ? <span style={css.warn}>{t('keyUnresolved', { value: effectiveRef })}</span>
+            : <span style={css.muted}>{t('keyStoredWhere', { value: effectiveRef })}</span>}
       </div>
 
       <div style={css.field}>

@@ -181,10 +181,14 @@ Node half (the configuration surface the host exposes):
   `GET {baseURL}/models` probe (the draft's one-off key, else the route's
   stored credential, else unauthenticated); a draft naming the route but no
   endpoint is answered from the configured catalog with no network call.
-- **Credentials** — a named `apiKeyEnv` resolves through the durable
-  credentials service first (what the web Models page writes keys into),
-  then the launch environment. A miss fails loud with `MISSING_CREDENTIAL`
-  rather than letting the deployment pick up an unrelated ambient key.
+- **Credentials** — the section's `apiKeyEnv` field is a *name* (a
+  credential ref or an environment-variable name), never a key value. The
+  adapter resolves it through the durable credentials service first (what
+  the web Models page writes keys into), then the launch environment. A
+  miss fails loud with `MISSING_CREDENTIAL` rather than letting the
+  deployment pick up an unrelated ambient key — and an unresolvable name
+  means the discovery probe falls back to unauthenticated, which an
+  auth-protected vLLM answers with `401`.
 
 Client half (the page you actually edit):
 
@@ -192,7 +196,7 @@ Client half (the page you actually edit):
   as `./client`, built to a module-table bundle `lib/client.js`). It
   registers a `Qwen 本地 (vLLM)` page into the settings modal's
   `settings.section` slot and renders one form over the `llm-qwen-local`
-  section: `baseURL`, the API-key env var, the model list (id / name /
+  section: `baseURL`, an **API Key** field, the model list (id / name /
   capacities / multimodal / `preserveThinking` / reasoning efforts), a
   **Discover models** button (probes the draft endpoint via
   `llm.discoverModels` and merges the ids), and **Save** (writes the whole
@@ -201,6 +205,16 @@ Client half (the page you actually edit):
   inline. Copy is bilingual (zh/en) through the DSH locale registry, and the
   page refetches on `settings/document-updated` so two open surfaces
   converge.
+  - The **API Key** field follows the core Models-page convention: the value
+    is written to the durable credentials service under the provider's
+    derived ref `QWEN_LOCAL_API_KEY` (via `credentials.set`), and the
+    section's `apiKeyEnv` records that ref name — the raw key never lands in
+    `settings.yaml`. Leaving the field empty keeps the current key (or sends
+    no `Authorization` header when none is stored); a **Clear** button
+    removes the stored credential and the reference. If the section already
+    names a ref this page does not manage (e.g. a pasted raw key), the form
+    flags it, since the adapter cannot resolve it and the endpoint would
+    keep answering `401`.
 - The bundle requires only the platform `react` / `react/jsx-runtime`
   modules — every DSH type import is type-only and erased, and all services
   arrive through the injected `slots` / `locale` / `connection` / `remote`
