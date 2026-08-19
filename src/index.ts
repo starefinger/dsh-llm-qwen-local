@@ -37,7 +37,6 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'
 import type { LlmDiscoveredModel } from '@deepseek-ai/dsh-llm'
@@ -107,8 +106,10 @@ export function apply(ctx: Context, config: Config): void {
   // fails loud: handing the deployment a missing key silently would let it
   // authenticate as whatever ambient key it happens to find.
   const resolveApiKey = async (ref: string): Promise<string> => {
+    // The credentials service is optional in the context; ref name
+    // validation is the service seam's own concern.
     const credentials = ctx.get('credentials')
-    const hit = credentials !== undefined ? await credentials.resolve(credentialRef(ref)) : undefined
+    const hit = credentials !== undefined ? await credentials.resolve(ref) : undefined
     if (hit !== undefined && hit.value.length > 0) {
       return assertUsableApiKey(hit.value, 'dsh-llm-qwen-local', ref)
     }
