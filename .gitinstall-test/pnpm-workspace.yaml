@@ -1,4 +1,0 @@
-allowBuilds:
-  esbuild: true
-onlyBuiltDependencies:
-  - dsh-llm-qwen-local
