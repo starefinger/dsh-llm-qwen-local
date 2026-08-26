@@ -3,3 +3,5 @@ lib/
 *.tgz
 pnpm-lock.yaml
 .pnpm-store/
+.scratch-docs*/
+.gitinstall-test/
