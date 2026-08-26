@@ -15,14 +15,13 @@ import { build } from 'esbuild'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
 
-// The web shell's shared platform modules (packages/client/web PLATFORM_MODULES).
+// The web shell's shared platform modules (packages/client/web PLATFORM_MODULES,
+// 0.1.1-rc.2): the list shrank with the client refactor — web-react,
+// ui-attachment, and schema-form are no longer table entries.
 const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-web-react',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-ui-attachment',
-  '@deepseek-ai/dsh-client-schema-form',
 ]
 // Client packages this plugin is linked against (declared in dsh.client.inject).
 const CLIENT_EDGES = [

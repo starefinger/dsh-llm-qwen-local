@@ -10,12 +10,22 @@
  * Image bytes are resolved through the durable attachment service, so a
  * session log reference is the only image address this adapter understands.
  *
+ * Request-image projection: image bytes go through the durable attachment
+ * service's request-image pipeline (`readImageRequest`) when the mounted
+ * provider implements it — deterministic aspect-preserving projection to the
+ * model's pixel/byte budget plus cached variants — and fall back to the
+ * normalized master bytes (`readImage`) when the provider cannot project.
+ * Harness note: since the LLM runtime now projects images to text
+ * placeholders for models whose `inputModalities` exclude `image`, the
+ * text-only gate below is a direct-adapter defense; the harness path replaces
+ * the image before the adapter ever sees it.
+ *
  * Reasoning policy: the selected effort (`GenerateOptions.reasoningEffort`,
  * else the model's configured `defaultEffort`) maps through the model's
  * configured effort table to a wire `reasoning_effort` spelling
  * (Qwen3.8-27B's official levels: `xhigh` (default), `medium`, `low`). The
  * `off` level (wire `none` by convention; `null` on a pre-parameter build)
-  * sends its wire value plus the `offMode` expression: `chat-template-kwargs` appends
+ * sends its wire value plus the `offMode` expression: `chat-template-kwargs` appends
  * `chat_template_kwargs: { enable_thinking: false }` (the model's documented
  * non-thinking mode; thinking is ON by default); `omit` appends nothing.
  * `session-title` auxiliary calls are forced to `off`: a short title never
@@ -34,15 +44,79 @@
  * @module dsh-llm-qwen-local/serialize
  */
 
-import { contentHasImage, LlmError } from '@deepseek-ai/dsh-llm'
+import { contentHasImage, LlmError, offloadRequestImagesWithPolicy } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
-import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
+import { AttachmentError } from '@deepseek-ai/dsh-attachment'
+import type {
+  AttachmentStore,
+  ImageAttachmentRef,
+  ImageMediaType,
+  ImageRequestPolicy,
+} from '@deepseek-ai/dsh-attachment'
+import {
+  DEFAULT_IMAGE_MAX_BYTES,
+  DEFAULT_IMAGE_MAX_PIXELS,
+} from './config.js'
 import type { QwenLocalModel, QwenLocalReasoning } from './config.js'
 import type { WireImagePart, WireMessage, WireRequest, WireTextPart, WireTool } from './wire.js'
 
 /** Minimal text-only model record for unlisted ids (advisory catalog). */
 export function unlistedModel(id: string): QwenLocalModel {
   return { id, multimodal: false }
+}
+
+/** One serializable request image: bytes plus the media type to declare. */
+export interface RequestImageBytes {
+  data: Uint8Array
+  mediaType: ImageMediaType
+}
+
+/**
+ * The attachment store's request-image capability is marked by the
+ * `ATTACHMENT_PROJECTION_UNSUPPORTED` code (the base-class default rejection).
+ */
+const PROJECTION_UNSUPPORTED = 'ATTACHMENT_PROJECTION_UNSUPPORTED'
+
+/**
+ * Resolve one durable image to request bytes: the attachment provider's
+ * deterministic request-image projection when it implements one (cached
+ * variants, aspect-preserving downscale to the model's pixel budget, encoded
+ * byte cap), otherwise the normalized master bytes. A provider that cannot
+ * project refuses with `ATTACHMENT_PROJECTION_UNSUPPORTED`; that specific
+ * rejection falls back, every other failure propagates.
+ * @param attachments - durable byte resolver (required whenever an image is present).
+ * @param ref - the durable image reference from the session log.
+ * @param policy - pixel and encoded-byte budgets for the request version.
+ * @param signal - cancellation for the backend work.
+ * @returns request bytes and their media type.
+ */
+export async function resolveRequestImageBytes(
+  attachments: AttachmentStore,
+  ref: ImageAttachmentRef,
+  policy: ImageRequestPolicy,
+  signal?: AbortSignal,
+): Promise<RequestImageBytes> {
+  if (typeof attachments.readImageRequest === 'function') {
+    try {
+      const projected = await attachments.readImageRequest(ref, policy, signal)
+      return { data: projected.data, mediaType: projected.mediaType }
+    } catch (error: unknown) {
+      if (!(error instanceof AttachmentError) || error.code !== PROJECTION_UNSUPPORTED) throw error
+    }
+  }
+  const stored = await attachments.readImage(ref, signal)
+  return { data: stored.data, mediaType: stored.ref.mediaType }
+}
+
+/**
+ * The request-image policy one resolved model contributes: pixel and encoded
+ * byte budgets with the harness canonical defaults, overridable per model.
+ */
+export function imagePolicy(model: QwenLocalModel): ImageRequestPolicy {
+  return {
+    maxPixels: model.imageMaxPixels ?? DEFAULT_IMAGE_MAX_PIXELS,
+    maxBytes: model.imageMaxBytes ?? DEFAULT_IMAGE_MAX_BYTES,
+  }
 }
 
 /** The request-level wire control fields one resolved model contributes. */
@@ -148,11 +222,16 @@ async function serializeParts(
       continue
     }
     if (block.type === 'image') {
-      const stored = await attachments.readImage(block.attachment, signal)
-      const base64 = Buffer.from(stored.data).toString('base64')
+      const requestImage = await resolveRequestImageBytes(
+        attachments,
+        block.attachment,
+        imagePolicy(model),
+        signal,
+      )
+      const base64 = Buffer.from(requestImage.data).toString('base64')
       parts.push({
         type: 'image_url',
-        image_url: { url: `data:${stored.ref.mediaType};base64,${base64}` },
+        image_url: { url: `data:${requestImage.mediaType};base64,${base64}` },
       })
       continue
     }
@@ -207,7 +286,7 @@ function serializeAssistant(message: Message, model: QwenLocalModel): WireMessag
  * @returns the wire messages; order preserved, each tool result expanded into its own entry.
  */
 export async function serializeMessages(
-  messages: Message[],
+  messages: readonly Message[],
   model: QwenLocalModel,
   attachments: AttachmentStore | undefined,
   signal?: AbortSignal,
@@ -265,22 +344,35 @@ export async function serializeMessages(
 /**
  * Build the full wire request. Always streaming (`stream: true`, usage
  * reporting on); optional fields are omitted rather than sent as null, so
- * deployment defaults apply.
+ * deployment defaults apply. When `maxRequestImageBytes` bounds the route's
+ * total inlined payload, the OLDEST images are replaced with a deterministic
+ * text placeholder first (the harness `offloadRequestImages` policy), so a
+ * history-heavy vision request still fits the endpoint's input cap.
  * @param options - the harness request (model, history, system, tools, sampling).
  * @param model - the resolved model configuration.
  * @param attachments - durable byte resolver; `undefined` refuses any image.
+ * @param maxRequestImageBytes - route-level total inlined base64 payload bound; absent = keep every image.
  * @returns the chat-completions request body.
  */
 export async function serializeRequest(
   options: GenerateOptions,
   model: QwenLocalModel,
   attachments: AttachmentStore | undefined,
+  maxRequestImageBytes?: number,
 ): Promise<WireRequest> {
   const messages: WireMessage[] = []
   if (options.system !== undefined) {
     messages.push({ role: 'system', content: options.system })
   }
-  messages.push(...await serializeMessages(options.messages, model, attachments, options.signal))
+  const history = maxRequestImageBytes === undefined
+    || !options.messages.some(message => contentHasImage(message.content))
+    ? options.messages
+    : offloadRequestImagesWithPolicy(options.messages, {
+      representation: 'base64',
+      maxBytes: maxRequestImageBytes,
+      byteQuantum: 1,
+    })
+  messages.push(...await serializeMessages(history, model, attachments, options.signal))
 
   const tools: WireTool[] | undefined = options.tools === undefined || options.tools.length === 0
     ? undefined

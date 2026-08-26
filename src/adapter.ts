@@ -28,6 +28,7 @@ import type {
   LlmModelInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
+  PreparedAdapterCall,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
@@ -146,27 +147,52 @@ export class QwenLocalAdapter extends LlmAdapter {
     return Promise.resolve(this.config.options().models.map(model => this.modelInfo(provider, model)))
   }
 
+  /**
+   * Bind exact model metadata and the request dispatch to ONE connection
+   * generation (the new `LlmAdapter.prepareCall` seam). The harness prepares a
+   * call before dispatching it; without this override the default
+   * implementation would resolve the model and stream through two separate
+   * `options()` reads, so a settings commit between preparation and dispatch
+   * could combine one generation's modalities with another generation's
+   * endpoint. The snapshot also freezes `resolveApiKey`-independent facts for
+   * the whole dispatch.
+   * @param provider - registered provider route.
+   * @param model - exact model id.
+   * @returns model metadata and a one-generation stream entry point.
+   */
+  override prepareCall(provider: string, model: string, _signal?: AbortSignal): Promise<PreparedAdapterCall> {
+    const connection = this.config.options()
+    return Promise.resolve({
+      model: this.resolveModelWith(provider, model, connection),
+      stream: options => this.streamWithConnection(options, connection),
+    })
+  }
+
   override resolveModel(
     provider: string,
     model: string,
     _signal?: AbortSignal,
   ): Promise<LlmResolvedModelInfo> {
-    const connection = this.config.options()
+    return Promise.resolve(this.resolveModelWith(provider, model, this.config.options()))
+  }
+
+  /** Exact-model metadata from one fixed connection snapshot. */
+  private resolveModelWith(provider: string, model: string, connection: QwenLocalOptions): LlmResolvedModelInfo {
     const configured = connection.models.find(entry => entry.id === model)
     if (configured === undefined) {
       // The uncatalogued fallback declares the same negative multimodal
       // capability as a text-only entry: "unknown" would let the host accept
       // and persist images the serializer must then reject.
-      return Promise.resolve({
+      return {
         provider,
         id: model,
         name: model,
         inputModalities: ['text'],
         context: { contextWindow: connection.defaultContextWindow },
         defaultMaxTokens: connection.maxTokens,
-      })
+      }
     }
-    return Promise.resolve(this.resolvedModelInfo(provider, configured, connection))
+    return this.resolvedModelInfo(provider, configured, connection)
   }
 
   /** Detached display metadata for one configured model. */
@@ -207,16 +233,22 @@ export class QwenLocalAdapter extends LlmAdapter {
     }
   }
 
-  async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+  stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    return this.streamWithConnection(options, this.config.options())
+  }
+
+  private async * streamWithConnection(
+    options: GenerateOptions,
+    connection: QwenLocalOptions,
+  ): AsyncIterable<StreamChunk> {
     // One resolution per stream call: connection facts freeze here and hold
     // for this whole request, so an in-flight stream never observes a
     // configuration change and the next call re-resolves.
-    const connection = this.config.options()
     const model = connection.models.find(entry => entry.id === options.model) ?? unlistedModel(options.model)
     const attachments = this.config.resolveAttachments?.()
     let body
     try {
-      body = await serializeRequest(options, model, attachments)
+      body = await serializeRequest(options, model, attachments, connection.maxRequestImageBytes)
     } catch (error: unknown) {
       if (error instanceof LlmError) throw error
       throw new LlmError('qwen-local request serialization failed', 'PROTOCOL', { cause: error })

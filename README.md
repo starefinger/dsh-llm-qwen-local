@@ -1,11 +1,18 @@
 # dsh-llm-qwen-local
 
+English | [中文](README.zh.md)
+
 DeepSeek Harness LLM adapter plugin for a **locally deployed Qwen model** (e.g. Qwen3.8) served by **vLLM** behind its OpenAI-compatible `/v1/chat/completions` endpoint.
 
 Two deployment-specific knobs are first-class:
 
 - **Per-model multimodal switch** (`multimodal: true/false`) — declares whether the deployment serves the model with vision.
 - **Fully configurable reasoning efforts** — every selectable level, its display name, its `reasoning_effort` wire spelling, the default level, and how `off` is expressed on the wire all come from configuration, matching whatever vocabulary your vLLM build accepts.
+
+Plus, since the 0.1.1-rc.2 harness upgrade:
+
+- **One-generation call binding** — the adapter overrides `LlmAdapter.prepareCall` to snapshot connection facts (endpoint, catalog, budgets) once and bind both model metadata and the eventual dispatch to that snapshot, so a settings commit between preparation and dispatch can never combine two configuration generations.
+- **Request-image pipeline** — image bytes go through the durable attachment service's `readImageRequest` projection (deterministic pixel/byte budgets, cached variants) when the mounted provider implements it, falling back to the normalized master bytes otherwise.
 
 ```yaml
 - id: llm-qwen-local
@@ -27,7 +34,10 @@ Two deployment-specific knobs are first-class:
 
 ## Requirements
 
-- An installed `dsh` (the CLI), and a vLLM instance serving your Qwen model with the OpenAI-compatible API.
+- An installed `dsh` (the CLI) **0.1.1-rc.2 or newer** (the adapter uses the
+  `LlmAdapter.prepareCall` seam and the harness-side text-only image
+  projection introduced there), and a vLLM instance serving your Qwen model
+  with the OpenAI-compatible API.
 - Node.js with global `fetch` (18+).
 
 ## Install
@@ -44,7 +54,7 @@ dsh --profile demo --dump-config
 dsh --profile demo
 ```
 
-The bundle's `cordis.patch.yml` inserts a baseline `llm-qwen-local` line (model `qwen3.8`, text-only, `off/low/medium/high` efforts, default `high`). Select the model in the Web UI's model selector once installed; the adapter advertises it through `listModels()`.
+The bundle's `cordis.patch.yml` inserts a baseline `llm-qwen-local` line (model `qwen3.8`, `multimodal: true`, `off/low/medium/xhigh` efforts, default `xhigh`). Select the model in the Web UI's model selector once installed; the adapter advertises it through `listModels()`.
 
 To change anything, override the line from your profile's `cordis.patch.yml` by `id: llm-qwen-local` — a patch replaces the target line's **entire** `config` (no deep merge), so restate every key you keep.
 
@@ -60,6 +70,7 @@ All fields except `models` are optional in `cordis.yml`; schema defaults fill th
 | `defaultContextWindow` | `262144` | Context capacity used when a model has no exact value. |
 | `maxTokens` | `32768` | Per-request output cap fallback; explicit request values and a model's own cap win. |
 | `streamIdleTimeoutMs` | `300000` | Maximum provider idle time while one stream read is outstanding. |
+| `maxRequestImageBytes` | — (keep every image) | Total inlined base64 image payload bound per request; when exceeded, the **oldest** images are replaced with a deterministic text placeholder before serialization (the harness `offloadRequestImages` policy), so a history-heavy vision request still fits the endpoint's input cap. |
 
 ### Model entries
 
@@ -72,18 +83,20 @@ All fields except `models` are optional in `cordis.yml`; schema defaults fill th
 | `maxTokens` | route default | This model's per-request output cap. |
 | `multimodal` | `false` | The vision switch (below). Qwen3.8-27B is a native vision-language model — set `true` for it. |
 | `preserveThinking` | `true` | Whether the deployment keeps historical thinking blocks (Qwen3.8's `preserve_thinking`, template default on). `false` sends `chat_template_kwargs: { preserve_thinking: false }` and the adapter stops replaying assistant reasoning into history. |
+| `imageMaxPixels` | `640000` | Request-image pixel budget (width × height) after aspect-preserving projection — the harness canonical default shared with the official adapters. Raise it for detail-critical vision work; blank = default. |
+| `imageMaxBytes` | `1048576` | Per-request-image encoded-byte cap before base64 inlining. |
 | `reasoning` | — | Reasoning capability; absent = the model exposes no selectable efforts. |
 
 ### The multimodal switch
 
-`multimodal` is a **claim about your endpoint, not a check of it** — nothing interrogates vLLM for what it accepts:
+`multimodal` is a **claim about your endpoint, not a check of it** — nothing interrogates vLLM for what it accepts. Since the 0.1.1-rc.2 harness upgrade, the harness LLM runtime itself handles the under-claim case:
 
-- `false` (default): the model is advertised text-only (`inputModalities: ['text']`). The harness refuses images **before send** (naming the model), and the adapter refuses again at serialization time (`UNSUPPORTED_CONTENT`) — the second gate covers sessions that attached images before the switch was turned off.
+- `false` (default): the model is advertised text-only (`inputModalities: ['text']`). The harness runtime now **projects** images into a deterministic text placeholder (`[image omitted because this model accepts text only; attachment sha256:…]`) **before the adapter sees them** — the request proceeds text-only instead of being refused. The adapter keeps its own `UNSUPPORTED_CONTENT` gate at serialization time for direct (non-runtime) use and for history assembled outside the runtime projection.
 - `true`: the model is advertised with `['text', 'image']`. Image bytes are resolved through the durable attachment service (`ctx.attachments`); a composition without that service refuses any image with `UNSUPPORTED_CONTENT` instead of guessing a source.
 
-The two wrong answers do not cost the same: under-claiming costs a refusal before the request goes out; over-claiming admits an image the provider then rejects **mid-turn**, after the message is durable in the session log — that session will keep re-sending the failing image. Recovery is a new session, a fork before the image, or a different model; rolling an unconsumed image message back out of a failed send is deferred.
+The two wrong answers do not cost the same: **over-claiming** admits an image the provider then rejects **mid-turn**, after the message is durable in the session log — that session will keep re-sending the failing image. Recovery is a new session, a fork before the image, or a different model; rolling an unconsumed image message back out of a failed send is deferred. **Under-claiming** no longer fails loud: the image silently becomes the placeholder above — the model still answers, but cannot see the image (recovery: flip the switch, then re-ask). The direct-adapter gate (`UNSUPPORTED_CONTENT`, naming the model) still fires for callers that bypass the runtime projection.
 
-Images are inlined as `image_url` parts with `data:<mediaType>;base64,…` values.
+Image bytes are inlined as `image_url` parts with `data:<mediaType>;base64,…` values, projected through the attachment service's request-image pipeline when available (`readImageRequest`; the harness canonical policy: up to `imageMaxPixels` pixels, `imageMaxBytes` encoded bytes, cached per variant) with a fallback to the normalized master bytes (`readImage`) for providers that refuse projection with `ATTACHMENT_PROJECTION_UNSUPPORTED`.
 
 ### Reasoning efforts
 
@@ -140,7 +153,7 @@ Every wire field the adapter sends or reads, and where it comes from:
 | `model`/`messages`/`stream`/`stream_options` | OpenAI standard | yes | yes | yes |
 | `temperature`/`max_tokens`/`stop` | OpenAI standard | yes | yes | yes |
 | `tools`/`tool_calls` | OpenAI standard | yes | yes | yes |
-| `image_url` (data URL) | OpenAI standard | yes | yes | VL builds |
+| `image_url` (data URL, request-projected) | OpenAI standard | yes | yes | VL builds |
 | `reasoning_effort` | OpenAI-family, documented by Qwen | yes | yes | no (ignored or 400) |
 | `chat_template_kwargs` | **vLLM extension** | yes | yes | no |
 | `delta.reasoning_content` (+ `reasoning` fallback) | Qwen template dialect, not framework-bound | `--reasoning-parser qwen3` | Qwen3 parser | `--reasoning-format deepseek` |
@@ -196,8 +209,9 @@ Client half (the page you actually edit):
   as `./client`, built to a module-table bundle `lib/client.js`). It
   registers a `Qwen 本地 (vLLM)` page into the settings modal's
   `settings.section` slot and renders one form over the `llm-qwen-local`
-  section: `baseURL`, an **API Key** field, the model list (id / name /
-  capacities / multimodal / `preserveThinking` / reasoning efforts), a
+  section: `baseURL`, the route-level `maxRequestImageBytes`, an **API Key**
+  field, the model list (id / name / capacities / image budgets /
+  multimodal / `preserveThinking` / reasoning efforts), a
   **Discover models** button (probes the draft endpoint via
   `llm.discoverModels` and merges the ids), and **Save** (writes the whole
   section via `settings.replace`). The host validates the draft against the
@@ -233,7 +247,7 @@ change.
 
 ## Error paths
 
-- **Thrown from `stream()`** (transport/protocol failures): fetch failure or `TRANSPORT`; non-2xx mapped to `AUTH`/`RATE_LIMIT`/`INVALID_REQUEST`/`SERVER`/`HTTP_<n>` (with `status`, `retry-after`, request id when present); malformed SSE payload `MALFORMED_RESPONSE`; truncation without `[DONE]` `STREAM_CLOSED`; idle timeout `TIMEOUT`; caller abort `ABORTED`; image/content gates `UNSUPPORTED_CONTENT`; unknown effort `UNSUPPORTED_REASONING_EFFORT`; a named `apiKeyEnv` that resolves nowhere `MISSING_CREDENTIAL` (before any network I/O).
+- **Thrown from `stream()`** (transport/protocol failures): fetch failure or `TRANSPORT`; non-2xx mapped to `AUTH`/`RATE_LIMIT`/`INVALID_REQUEST`/`SERVER`/`HTTP_<n>` (with `status`, `retry-after`, request id when present); malformed SSE payload `MALFORMED_RESPONSE`; truncation without `[DONE]` `STREAM_CLOSED`; idle timeout `TIMEOUT`; caller abort `ABORTED`; image/content gates `UNSUPPORTED_CONTENT` (direct-adapter use only — the runtime projects images for text-only models first); unknown effort `UNSUPPORTED_REASONING_EFFORT`; a named `apiKeyEnv` that resolves nowhere `MISSING_CREDENTIAL` (before any network I/O). A request-image projection failure other than the unsupported-capability refusal propagates as the attachment error.
 - **In-band provider failure**: an SSE payload carrying an `error` object closes open blocks and ends the stream with `finish {kind: 'error', failure: {code: 'PROVIDER_ERROR'}}`.
 - A completed response with no content maps to an `EMPTY_RESPONSE` error finish.
 
@@ -251,7 +265,8 @@ Tests run against a scripted in-process vLLM (SSE) mock — no real model or end
 
 ## Known Limitations and Deferred Work
 
-- **A modality declaration is not verified** — `multimodal: true` on a text-only endpoint fails mid-turn after the image message is durable (recovery: new session / fork / other model).
+- **A modality declaration is not verified** — `multimodal: true` on a text-only endpoint fails mid-turn after the image message is durable (recovery: new session / fork / other model). The reverse direction is now **silent**: `multimodal: false` on a vision endpoint makes the runtime project images into text placeholders, so the model answers without seeing them (flip the switch and re-ask).
+- **Request-image projection is provider-dependent** — when the mounted attachment provider cannot derive request images (`ATTACHMENT_PROJECTION_UNSUPPORTED`), the adapter falls back to the normalized master bytes, so `imageMaxPixels`/`imageMaxBytes` become advisory for that deployment.
 - **No image inside tool results** — vLLM `role: 'tool'` content is text-only; an image there is refused with `UNSUPPORTED_CONTENT`.
 - **No `replayState`** — the endpoint is stateless and history replays cleanly from recorded blocks (reasoning included, via `preserve_thinking`), so the adapter emits no adapter-private replay metadata.
 - **No per-route retry policy** — v1 has no `retryPolicy` config; the harness normal defaults apply.

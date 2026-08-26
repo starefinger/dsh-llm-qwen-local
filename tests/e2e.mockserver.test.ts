@@ -5,12 +5,14 @@
 import { createServer, type IncomingHttpHeaders, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, describe, expect, it } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
 import {
   CallId,
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
   LlmError,
+  LlmRuntime,
   ReasoningEffortId,
 } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -454,5 +456,106 @@ describe('QwenLocalAdapter e2e (mock vLLM)', () => {
       { role: 'tool', tool_call_id: 'call-1', content: 'file.txt' },
     ])
     await mock.close()
+  })
+
+  it('binds prepareCall to one connection generation (a settings change cannot mix generations)', async () => {
+    const first = tracked(await startMockVllm((res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      frame(res, { choices: [{ delta: { content: 'from-snapshot' }, finish_reason: 'stop' }] })
+      frame(res, { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } })
+      frame(res, '[DONE]')
+      res.end()
+    }))
+    const second = tracked(await startMockVllm((res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      frame(res, { choices: [{ delta: { content: 'from-new-config' }, finish_reason: 'stop' }] })
+      frame(res, { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } })
+      frame(res, '[DONE]')
+      res.end()
+    }))
+    let connection = resolveConfig({ ...BASE_CONFIG, baseURL: first.url })
+    const adapter = new QwenLocalAdapter({ options: () => connection })
+
+    // Prepare against the FIRST generation…
+    const prepared = await adapter.prepareCall('qwen-local', 'qwen3.8')
+    expect(prepared.model).toMatchObject({
+      provider: 'qwen-local',
+      id: 'qwen3.8',
+      inputModalities: ['text', 'image'],
+    })
+
+    // …then the configuration source switches to the SECOND endpoint before
+    // dispatch. The prepared stream must still hit the snapshot endpoint.
+    connection = resolveConfig({ ...BASE_CONFIG, baseURL: second.url })
+    const chunks = await drain(prepared.stream(options()))
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+    expect(first.requests).toHaveLength(1)
+    expect(second.requests).toHaveLength(0)
+
+    // An unprepared stream on the same adapter reads the CURRENT generation.
+    await drain(adapter.stream(options()))
+    expect(second.requests).toHaveLength(1)
+    expect(first.requests).toHaveLength(1)
+
+    await first.close()
+    await second.close()
+  })
+
+  it('resolves model metadata and dispatch from the same snapshot for unlisted ids', async () => {
+    const mock = tracked(await startMockVllm((res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      frame(res, { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] })
+      frame(res, '[DONE]')
+      res.end()
+    }))
+    const adapter = adapterFor({ ...BASE_CONFIG, baseURL: mock.url })
+    const prepared = await adapter.prepareCall('qwen-local', 'not-in-catalog')
+    // The unlisted fallback declares negative multimodal capability so the
+    // harness projects images for it.
+    expect(prepared.model.inputModalities).toEqual(['text'])
+    expect(prepared.model.context?.contextWindow).toBe(BASE_CONFIG.defaultContextWindow)
+    await drain(prepared.stream(options({ model: 'not-in-catalog' })))
+    expect(mock.requests[0]?.body.model).toBe('not-in-catalog')
+    await mock.close()
+  })
+
+  it('drives prepareCall through the real harness LlmRuntime (one generation per prepared call)', async () => {
+    const first = tracked(await startMockVllm((res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      frame(res, { choices: [{ delta: { content: 'gen-1' }, finish_reason: 'stop' }] })
+      frame(res, { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } })
+      frame(res, '[DONE]')
+      res.end()
+    }))
+    const second = tracked(await startMockVllm((res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      frame(res, { choices: [{ delta: { content: 'gen-2' }, finish_reason: 'stop' }] })
+      frame(res, { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } })
+      frame(res, '[DONE]')
+      res.end()
+    }))
+    let connection = resolveConfig({ ...BASE_CONFIG, baseURL: first.url })
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter(['qwen-local'], new QwenLocalAdapter({ options: () => connection }))
+
+    const prepared = await ctx.llm.prepareCall({ provider: 'qwen-local', model: 'qwen3.8' })
+    // The runtime captured inputModalities from the adapter's one-generation model.
+    expect(prepared.inputModalities).toEqual(['text', 'image'])
+
+    // A settings commit lands between preparation and dispatch…
+    connection = resolveConfig({ ...BASE_CONFIG, baseURL: second.url })
+    const chunks = await drain(prepared.stream({ ...prepared.config, messages: options().messages }))
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+    expect(first.requests).toHaveLength(1)
+    expect(second.requests).toHaveLength(0)
+
+    // …and a fresh prepareCall reads the new generation.
+    const prepared2 = await ctx.llm.prepareCall({ provider: 'qwen-local', model: 'qwen3.8' })
+    await drain(prepared2.stream({ ...prepared2.config, messages: options().messages }))
+    expect(second.requests).toHaveLength(1)
+
+    await first.close()
+    await second.close()
   })
 })

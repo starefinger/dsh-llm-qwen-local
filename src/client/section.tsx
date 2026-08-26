@@ -9,7 +9,9 @@
  * ref (`QWEN_LOCAL_API_KEY`), and the section's `apiKeyEnv` field records
  * that ref name for the adapter's resolver. Model discovery probes the
  * draft's endpoint through `llm.discoverModels` and merges the ids into the
- * draft.
+ * draft. The form also edits the request-image budgets introduced by the
+ * 0.1.1-rc.2 harness upgrade: per-model pixel/byte projection budgets and
+ * the route-level total inlined payload cap.
  *
  * Styling is inline by design: the client bundle keeps away from the CSS
  * pipeline (no stylesheet route for plugin bundles in the module table), so
@@ -57,6 +59,8 @@ interface ModelDraft {
   name: string
   contextWindow: string
   maxTokens: string
+  imageMaxPixels: string
+  imageMaxBytes: string
   multimodal: boolean
   preserveThinking: boolean
   hasReasoning: boolean
@@ -71,6 +75,8 @@ interface PageState {
   baseURL: string
   /** The loaded section's `apiKeyEnv` value (a ref or env-var name). */
   apiKeyEnv: string
+  /** Route-level total inlined base64 image payload bound (blank = none). */
+  maxRequestImageBytes: string
   /** Pass-through fields the form does not render (idle timeout, defaults). */
   passthrough: Record<string, unknown>
 }
@@ -153,6 +159,8 @@ function toModels(raw: unknown): ModelDraft[] {
       name: stringField(record.name),
       contextWindow: numberField(record.contextWindow),
       maxTokens: numberField(record.maxTokens),
+      imageMaxPixels: numberField(record.imageMaxPixels),
+      imageMaxBytes: numberField(record.imageMaxBytes),
       multimodal: record.multimodal === true,
       preserveThinking: record.preserveThinking !== false,
       hasReasoning: record.reasoning !== undefined,
@@ -166,12 +174,13 @@ function toModels(raw: unknown): ModelDraft[] {
 /** Parse the resolved section value into page state, segregating passthrough. */
 function parsePage(value: unknown, revision: number): PageState {
   const record = field(value)
-  const { baseURL: _baseURL, apiKeyEnv: _apiKeyEnv, models: _models, ...rest } = record
+  const { baseURL: _baseURL, apiKeyEnv: _apiKeyEnv, models: _models, maxRequestImageBytes: _maxRequestImageBytes, ...rest } = record
   return {
     revision,
     baseURL: stringField(record.baseURL),
     apiKeyEnv: stringField(record.apiKeyEnv),
     draft: toModels(record.models),
+    maxRequestImageBytes: numberField(record.maxRequestImageBytes),
     passthrough: rest,
   }
 }
@@ -199,6 +208,8 @@ function wireModel(model: ModelDraft): Record<string, unknown> {
     ...model.name.length > 0 ? { name: model.name } : {},
     ...model.contextWindow.length > 0 ? { contextWindow: Number(model.contextWindow) } : {},
     ...model.maxTokens.length > 0 ? { maxTokens: Number(model.maxTokens) } : {},
+    ...model.imageMaxPixels.length > 0 ? { imageMaxPixels: Number(model.imageMaxPixels) } : {},
+    ...model.imageMaxBytes.length > 0 ? { imageMaxBytes: Number(model.imageMaxBytes) } : {},
     multimodal: model.multimodal,
     preserveThinking: model.preserveThinking,
     ...reasoning === undefined ? {} : { reasoning },
@@ -215,6 +226,9 @@ type KeyMode = 'new' | 'clear' | 'keep'
 function wireSection(state: PageState, keyMode: KeyMode): Record<string, unknown> {
   const section: Record<string, unknown> = { ...state.passthrough }
   if (state.baseURL.length > 0) section.baseURL = state.baseURL
+  if (state.maxRequestImageBytes.length > 0) {
+    section.maxRequestImageBytes = Number(state.maxRequestImageBytes)
+  }
   // A key store pins the effective ref (loaded or derived); a clear drops the
   // reference; keep leaves whatever the section already names untouched.
   const ref = keyMode === 'clear' ? undefined : refFor(state.apiKeyEnv)
@@ -350,6 +364,8 @@ export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX
           name: hit.name ?? '',
           contextWindow: hit.contextWindow === undefined ? '' : String(hit.contextWindow),
           maxTokens: hit.maxTokens === undefined ? '' : String(hit.maxTokens),
+          imageMaxPixels: '',
+          imageMaxBytes: '',
           multimodal: false,
           preserveThinking: true,
           hasReasoning: false,
@@ -449,6 +465,18 @@ export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX
       </div>
 
       <div style={css.field}>
+        <span style={css.label}>{t('maxRequestImageBytes')}</span>
+        <input
+          style={css.input}
+          type="number"
+          value={page.maxRequestImageBytes}
+          aria-label={t('maxRequestImageBytes')}
+          onChange={event => { setPage({ ...page, maxRequestImageBytes: event.target.value }); setSaved(false) }}
+        />
+        <span style={css.muted}>{t('imageBudgetHint')}</span>
+      </div>
+
+      <div style={css.field}>
         <div style={css.row}>
           <span style={css.label}>{t('keyInput')}</span>
           {keyStored || page.apiKeyEnv.length > 0
@@ -540,6 +568,26 @@ export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX
                   value={model.maxTokens}
                   aria-label={t('maxTokens')}
                   onChange={event => setModel(index, { maxTokens: event.target.value })}
+                />
+              </div>
+              <div style={{ ...css.field, width: 110 }}>
+                <span style={css.label}>{t('imageMaxPixels')}</span>
+                <input
+                  style={css.input}
+                  type="number"
+                  value={model.imageMaxPixels}
+                  aria-label={t('imageMaxPixels')}
+                  onChange={event => setModel(index, { imageMaxPixels: event.target.value })}
+                />
+              </div>
+              <div style={{ ...css.field, width: 110 }}>
+                <span style={css.label}>{t('imageMaxBytes')}</span>
+                <input
+                  style={css.input}
+                  type="number"
+                  value={model.imageMaxBytes}
+                  aria-label={t('imageMaxBytes')}
+                  onChange={event => setModel(index, { imageMaxBytes: event.target.value })}
                 />
               </div>
             </div>
@@ -678,6 +726,7 @@ export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX
               ...page,
               draft: [...page.draft, {
                 id: '', name: '', contextWindow: '', maxTokens: '',
+                imageMaxPixels: '', imageMaxBytes: '',
                 multimodal: true, preserveThinking: true,
                 hasReasoning: false, efforts: [], defaultEffort: '', offMode: 'chat-template-kwargs',
               }],

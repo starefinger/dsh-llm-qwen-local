@@ -2,3 +2,4 @@ node_modules/
 lib/
 *.tgz
 pnpm-lock.yaml
+.pnpm-store/

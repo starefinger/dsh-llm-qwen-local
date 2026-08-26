@@ -28,6 +28,19 @@ export const DEFAULT_CONTEXT_WINDOW = 262_144
 export const DEFAULT_MAX_TOKENS = 32_768
 /** Default maximum idle interval while a stream read is outstanding. */
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
+/**
+ * Default request-image pixel budget (width × height, aspect-preserving).
+ * Matches the harness's canonical request-image default (also llm-deepseek's),
+ * so a local deployment gets the same deterministic projection as the
+ * official adapters; raise per model for detail-critical vision work.
+ */
+export const DEFAULT_IMAGE_MAX_PIXELS = 640_000
+/**
+ * Default per-request-image encoded-byte cap before base64 inlining. Matches
+ * the harness canonical default; images above it are re-encoded down by the
+ * attachment provider's request-image projection.
+ */
+export const DEFAULT_IMAGE_MAX_BYTES = 1024 * 1024
 
 /**
  * One selectable reasoning effort. `id` is the opaque value the harness
@@ -96,6 +109,18 @@ export interface QwenLocalModel {
    * replaying assistant reasoning into history.
    */
   preserveThinking?: boolean
+  /**
+   * Request-image pixel budget (width × height) after aspect-preserving
+   * projection; omitted = {@link DEFAULT_IMAGE_MAX_PIXELS}. Resolved through
+   * the durable attachment service's request-image pipeline when the mounted
+   * provider supports it, raw normalized bytes otherwise.
+   */
+  imageMaxPixels?: number
+  /**
+   * Per-request-image encoded-byte cap before base64 inlining; omitted =
+   * {@link DEFAULT_IMAGE_MAX_BYTES}.
+   */
+  imageMaxBytes?: number
   /** Reasoning capability; absent = the model exposes no selectable efforts. */
   reasoning?: QwenLocalReasoning
 }
@@ -123,6 +148,14 @@ export interface Config {
   maxTokens?: number
   /** Maximum provider idle time while one stream read is outstanding. */
   streamIdleTimeoutMs?: number
+  /**
+   * Total inlined base64 image payload bound for one request, when the model
+   * catalog keeps images. Requests whose accumulated base64 length exceeds it
+   * have their OLDEST images replaced with a deterministic text placeholder
+   * before serialization (the harness `offloadRequestImages` policy). Absent
+   * = keep every image once each fits its per-image budget.
+   */
+  maxRequestImageBytes?: number
 }
 
 const reasoningEffortSchema: z<QwenLocalReasoningEffort> = z.object({
@@ -145,6 +178,8 @@ const modelSchema: z<QwenLocalModel> = z.object({
   maxTokens: z.number().step(1).min(1),
   multimodal: z.boolean().default(false),
   preserveThinking: z.boolean().default(true),
+  imageMaxPixels: z.number().step(1).min(1),
+  imageMaxBytes: z.number().step(1).min(1),
   reasoning: reasoningSchema,
 })
 
@@ -155,6 +190,7 @@ export const Config: z<Config> = z.object({
   defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
   maxTokens: z.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
   streamIdleTimeoutMs: z.number().min(1).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+  maxRequestImageBytes: z.number().step(1).min(1),
 })
 
 /**
@@ -175,6 +211,8 @@ export interface QwenLocalOptions {
   maxTokens: number
   /** Maximum provider idle time while one stream read is outstanding. */
   streamIdleTimeoutMs: number
+  /** Total inlined base64 image payload bound; absent = keep every image. */
+  maxRequestImageBytes?: number
 }
 
 const PKG = 'dsh-llm-qwen-local'
@@ -231,6 +269,14 @@ function resolveModel(raw: QwenLocalModel, index: number): QwenLocalModel {
     && (!Number.isInteger(raw.maxTokens) || raw.maxTokens <= 0)) {
     throw new Error(`${PKG}: model "${raw.id}" maxTokens must be a positive integer`)
   }
+  if (raw.imageMaxPixels !== undefined
+    && (!Number.isInteger(raw.imageMaxPixels) || raw.imageMaxPixels <= 0)) {
+    throw new Error(`${PKG}: model "${raw.id}" imageMaxPixels must be a positive integer`)
+  }
+  if (raw.imageMaxBytes !== undefined
+    && (!Number.isInteger(raw.imageMaxBytes) || raw.imageMaxBytes <= 0)) {
+    throw new Error(`${PKG}: model "${raw.id}" imageMaxBytes must be a positive integer`)
+  }
   return {
     id: raw.id,
     ...raw.name === undefined ? {} : { name: raw.name },
@@ -239,6 +285,8 @@ function resolveModel(raw: QwenLocalModel, index: number): QwenLocalModel {
     ...raw.maxTokens === undefined ? {} : { maxTokens: raw.maxTokens },
     multimodal: raw.multimodal === true,
     preserveThinking: raw.preserveThinking !== false,
+    ...raw.imageMaxPixels === undefined ? {} : { imageMaxPixels: raw.imageMaxPixels },
+    ...raw.imageMaxBytes === undefined ? {} : { imageMaxBytes: raw.imageMaxBytes },
     ...raw.reasoning === undefined ? {} : { reasoning: resolveReasoning(raw.reasoning, raw.id) },
   }
 }
@@ -272,6 +320,11 @@ export function resolveConfig(config: Config): QwenLocalOptions {
   if (!Number.isFinite(streamIdleTimeoutMs) || streamIdleTimeoutMs <= 0) {
     throw new Error(`${PKG}: streamIdleTimeoutMs must be a positive finite number`)
   }
+  const maxRequestImageBytes = config.maxRequestImageBytes
+  if (maxRequestImageBytes !== undefined
+    && (!Number.isSafeInteger(maxRequestImageBytes) || maxRequestImageBytes <= 0)) {
+    throw new Error(`${PKG}: maxRequestImageBytes must be a positive safe integer`)
+  }
   const baseURL = config.baseURL ?? DEFAULT_BASE_URL
   if (baseURL.length === 0) throw new Error(`${PKG}: baseURL must be a non-empty string`)
   return {
@@ -283,5 +336,6 @@ export function resolveConfig(config: Config): QwenLocalOptions {
     defaultContextWindow,
     maxTokens,
     streamIdleTimeoutMs,
+    ...maxRequestImageBytes === undefined ? {} : { maxRequestImageBytes },
   }
 }

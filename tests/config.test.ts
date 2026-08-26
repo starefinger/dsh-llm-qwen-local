@@ -98,4 +98,42 @@ describe('resolveConfig', () => {
       }],
     })).toThrow(/duplicate reasoning effort "low"/)
   })
+
+  it('accepts per-model image budgets and the route image byte cap, preserving absence', () => {
+    const resolved = resolveConfig({
+      ...BASE,
+      maxRequestImageBytes: 8 * 1024 * 1024,
+      models: [{
+        id: 'qwen3.8',
+        multimodal: true,
+        imageMaxPixels: 123_456,
+        imageMaxBytes: 2048,
+      }],
+    })
+    expect(resolved.maxRequestImageBytes).toBe(8 * 1024 * 1024)
+    expect(resolved.models[0]?.imageMaxPixels).toBe(123_456)
+    expect(resolved.models[0]?.imageMaxBytes).toBe(2048)
+    expect(resolved.models[0]).not.toHaveProperty('contextWindow')
+    expect(resolved).not.toHaveProperty('streamIdleTimeoutMs', undefined)
+  })
+
+  it('leaves the image fields absent when the config omits them', () => {
+    const resolved = resolveConfig(BASE)
+    expect(resolved.maxRequestImageBytes).toBeUndefined()
+    expect(resolved.models[0]).not.toHaveProperty('imageMaxPixels')
+    expect(resolved.models[0]).not.toHaveProperty('imageMaxBytes')
+  })
+
+  it('refuses non-positive image budgets and route cap', () => {
+    expect(() => resolveConfig({
+      ...BASE,
+      models: [{ id: 'qwen3.8', imageMaxPixels: 0 }],
+    })).toThrow(/imageMaxPixels must be a positive integer/)
+    expect(() => resolveConfig({
+      ...BASE,
+      models: [{ id: 'qwen3.8', imageMaxBytes: -1 }],
+    })).toThrow(/imageMaxBytes must be a positive integer/)
+    expect(() => resolveConfig({ ...BASE, maxRequestImageBytes: 0 }))
+      .toThrow(/maxRequestImageBytes must be a positive safe integer/)
+  })
 })

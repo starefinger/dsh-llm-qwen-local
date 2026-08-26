@@ -57,6 +57,8 @@ export {
   Config,
   DEFAULT_BASE_URL,
   DEFAULT_CONTEXT_WINDOW,
+  DEFAULT_IMAGE_MAX_BYTES,
+  DEFAULT_IMAGE_MAX_PIXELS,
   DEFAULT_MAX_TOKENS,
   DEFAULT_STREAM_IDLE_TIMEOUT_MS,
   resolveConfig,
@@ -70,7 +72,14 @@ export type {
 } from './config.js'
 export { discoverQwenModels } from './discovery.js'
 export type { QwenLocalDiscoveryFacts } from './discovery.js'
-export { serializeMessages, serializeRequest, unlistedModel } from './serialize.js'
+export {
+  imagePolicy,
+  resolveRequestImageBytes,
+  serializeMessages,
+  serializeRequest,
+  unlistedModel,
+} from './serialize.js'
+export type { RequestImageBytes } from './serialize.js'
 export { DONE, parseSse } from './sse.js'
 export { mapFinishReason, mapUsage, translate } from './translate.js'
 export type * from './wire.js'

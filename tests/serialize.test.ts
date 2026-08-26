@@ -5,11 +5,23 @@ import {
   createToolResultMessage,
   createUserMessage,
   LlmError,
+  OFFLOADED_IMAGE_TEXT,
   ReasoningEffortId,
 } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
-import { AttachmentId } from '@deepseek-ai/dsh-attachment'
-import type { AttachmentStore, ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import {
+  AttachmentError,
+  AttachmentId,
+  ImageVariantId,
+} from '@deepseek-ai/dsh-attachment'
+import type {
+  AttachmentStore,
+  ImageAttachmentRef,
+  ImageMediaType,
+  ImageRequestPolicy,
+  RequestImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
+import { DEFAULT_IMAGE_MAX_BYTES, DEFAULT_IMAGE_MAX_PIXELS } from '../src/config.js'
 import { serializeRequest } from '../src/serialize.js'
 import type { QwenLocalModel, QwenLocalReasoningEffort } from '../src/config.js'
 
@@ -57,16 +69,16 @@ function fakeStore(bytes = new Uint8Array([1, 2, 3]), mediaType: ImageMediaType 
   }
 }
 
-function imageMessage(): Message {
+function imageMessage(attachmentId = 'att-1', bytes = 3): Message {
   return createUserMessage({
     content: [
       { type: 'text', text: 'what is in this image?' },
       {
         type: 'image',
         attachment: {
-          attachmentId: AttachmentId('att-1'),
+          attachmentId: AttachmentId(attachmentId),
           mediaType: 'image/png',
-          bytes: 3,
+          bytes,
           width: 1,
           height: 1,
         },
@@ -74,6 +86,32 @@ function imageMessage(): Message {
     ],
     source: { kind: 'user' },
   })
+}
+
+/** A store whose readImageRequest returns fixed projected bytes. */
+function projectingStore(
+  data = new Uint8Array([9, 8, 7]),
+  mediaType: ImageMediaType = 'image/jpeg',
+): { store: AttachmentStore; calls: { ref: ImageAttachmentRef; policy: ImageRequestPolicy }[] } {
+  const calls: { ref: ImageAttachmentRef; policy: ImageRequestPolicy }[] = []
+  const store = {
+    readImageRequest: async (ref: ImageAttachmentRef, policy: ImageRequestPolicy): Promise<RequestImageAttachment> => {
+      calls.push({ ref, policy })
+      return {
+        variantId: ImageVariantId('variant-1'),
+        attachment: ref,
+        data,
+        mediaType,
+        bytes: data.length,
+        width: 2,
+        height: 1,
+        depth: 'uchar',
+        space: 'srgb',
+        hasAlpha: false,
+      }
+    },
+  }
+  return { store: store as unknown as AttachmentStore, calls }
 }
 
 describe('serializeRequest: messages', () => {
@@ -459,5 +497,130 @@ describe('serializeRequest: pass-through fields', () => {
     expect(body).not.toHaveProperty('stop')
     expect(body).not.toHaveProperty('reasoning_effort')
     expect(body).not.toHaveProperty('chat_template_kwargs')
+  })
+})
+
+describe('serializeRequest: request-image pipeline (0.1.1-rc.2)', () => {
+  it('projects through readImageRequest when the provider implements it, with the default policy', async () => {
+    const { store, calls } = projectingStore()
+    const body = await serializeRequest(
+      options({ model: 'qwen3.8-vl', messages: [imageMessage()] }),
+      MODEL_VISION,
+      store,
+    )
+    const message = body.messages[0]
+    if (message === undefined || message.role !== 'user' || typeof message.content === 'string') {
+      throw new Error('expected a multimodal user message')
+    }
+    // The projected bytes and media type, not the raw master's.
+    expect(message.content).toEqual([
+      { type: 'text', text: 'what is in this image?' },
+      { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,CQgH' } },
+    ])
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.ref.attachmentId).toBe(AttachmentId('att-1'))
+    expect(calls[0]?.policy).toEqual({
+      maxPixels: DEFAULT_IMAGE_MAX_PIXELS,
+      maxBytes: DEFAULT_IMAGE_MAX_BYTES,
+    })
+  })
+
+  it('passes per-model image budgets to the projection policy', async () => {
+    const { store, calls } = projectingStore()
+    const model: QwenLocalModel = {
+      id: 'qwen3.8-vl',
+      multimodal: true,
+      imageMaxPixels: 123_456,
+      imageMaxBytes: 2048,
+    }
+    await serializeRequest(
+      options({ model: 'qwen3.8-vl', messages: [imageMessage()] }),
+      model,
+      store,
+    )
+    expect(calls[0]?.policy).toEqual({ maxPixels: 123_456, maxBytes: 2048 })
+  })
+
+  it('falls back to readImage when the provider refuses projection', async () => {
+    const fallback = fakeStore(new Uint8Array([1, 2, 3]), 'image/png')
+    const store = {
+      ...fallback,
+      readImageRequest: async () => {
+        throw new AttachmentError('cannot derive model-request images', 'ATTACHMENT_PROJECTION_UNSUPPORTED')
+      },
+    } as unknown as AttachmentStore
+    const body = await serializeRequest(
+      options({ model: 'qwen3.8-vl', messages: [imageMessage()] }),
+      MODEL_VISION,
+      store,
+    )
+    const message = body.messages[0]
+    if (message === undefined || message.role !== 'user' || typeof message.content === 'string') {
+      throw new Error('expected a multimodal user message')
+    }
+    expect(message.content).toEqual([
+      { type: 'text', text: 'what is in this image?' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } },
+    ])
+    expect(fallback.calls).toHaveLength(1)
+  })
+
+  it('propagates a projection failure that is not the unsupported-capability refusal', async () => {
+    const store = {
+      readImageRequest: async () => {
+        throw new AttachmentError('backend exploded', 'ATTACHMENT_READ_FAILED')
+      },
+    } as unknown as AttachmentStore
+    let code = ''
+    try {
+      await serializeRequest(
+        options({ model: 'qwen3.8-vl', messages: [imageMessage()] }),
+        MODEL_VISION,
+        store,
+      )
+    } catch (error) {
+      code = (error as AttachmentError).code
+    }
+    expect(code).toBe('ATTACHMENT_READ_FAILED')
+  })
+
+  it('offloads the oldest image to a text placeholder when the route budget is exceeded', async () => {
+    const store = fakeStore()
+    const body = await serializeRequest(
+      options({
+        model: 'qwen3.8-vl',
+        // two 3-byte images, one per message: each inlines to 4 base64 chars;
+        // a 4-char bound must drop the oldest message's image deterministically.
+        messages: [imageMessage('att-old', 3), imageMessage('att-new', 3)],
+      }),
+      MODEL_VISION,
+      store as unknown as AttachmentStore,
+      4,
+    )
+    // The oldest message's image became the offload placeholder text, so the
+    // message serializes as a plain text user message; the newest message
+    // keeps its image (text + one image_url part).
+    expect(body.messages).toEqual([
+      { role: 'user', content: `what is in this image?${OFFLOADED_IMAGE_TEXT}` },
+      { role: 'user', content: [
+        { type: 'text', text: 'what is in this image?' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } },
+      ] },
+    ])
+    // Only the surviving image's bytes were read.
+    expect(store.calls.map(call => call.attachmentId)).toEqual([AttachmentId('att-new')])
+  })
+
+  it('keeps every image when the route budget is absent', async () => {
+    const store = fakeStore()
+    const body = await serializeRequest(
+      options({ model: 'qwen3.8-vl', messages: [imageMessage(), imageMessage('att-2')] }),
+      MODEL_VISION,
+      store as unknown as AttachmentStore,
+    )
+    const images = body.messages
+      .filter(message => message.role === 'user' && typeof message.content !== 'string')
+      .flatMap(message => (message.content as { type: string }[]).filter(part => part.type === 'image_url'))
+    expect(images).toHaveLength(2)
   })
 })
