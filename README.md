@@ -43,16 +43,21 @@ Plus, since the 0.1.1-rc.2 harness upgrade:
 ## Install
 
 ```sh
-# from the directory containing this checkout (build first):
-pnpm install && pnpm build
+# install from git (the prepare script builds lib/ on install):
+dsh plugin --profile demo add github:starefinger/dsh-llm-qwen-local
 
-# install into a profile (creates the profile on first use):
+# or from a local checkout (same prepare build runs on install):
 dsh plugin --profile demo add ./path/to/qwen3.8-LLM-plugin
+
+# or from a packed tarball (prebuilt — no build step on install):
+dsh plugin --profile demo add ./dsh-llm-qwen-local-0.3.0.tgz
 
 # verify the contributed layer, then start:
 dsh --profile demo --dump-config
 dsh --profile demo
 ```
+
+Git and local-path installs run the package's `prepare` script (→ `pnpm build`) to produce `lib/` during install. pnpm v10 blocks dependency build scripts until they are allowed: if the first install fails with a "blocked build scripts" notice, add the exact key pnpm printed under `allowBuilds` in the profile's `pnpm-workspace.yaml`, then re-run the same `dsh plugin add` command. The tarball install is prebuilt and never needs this.
 
 The bundle's `cordis.patch.yml` inserts a baseline `llm-qwen-local` line (model `qwen3.8`, `multimodal: true`, `off/low/medium/xhigh` efforts, default `xhigh`). Select the model in the Web UI's model selector once installed; the adapter advertises it through `listModels()`.
 

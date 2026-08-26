@@ -42,16 +42,21 @@
 ## 安装
 
 ```sh
-# 从本 checkout 所在目录(先构建):
-pnpm install && pnpm build
+# 从 git 安装(prepare 脚本会在安装时自动构建 lib/):
+dsh plugin --profile demo add github:starefinger/dsh-llm-qwen-local
 
-# 安装到某个 profile(首次使用时创建该 profile):
+# 或从本地 checkout 安装(同样在安装时运行 prepare 构建):
 dsh plugin --profile demo add ./path/to/qwen3.8-LLM-plugin
+
+# 或从打包好的 tarball 安装(预构建,安装时无需构建):
+dsh plugin --profile demo add ./dsh-llm-qwen-local-0.3.0.tgz
 
 # 验证贡献的层,然后启动:
 dsh --profile demo --dump-config
 dsh --profile demo
 ```
+
+git 与本地路径安装会在安装时运行包的 `prepare` 脚本(→ `pnpm build`)来生成 `lib/`。pnpm v10 默认拦截依赖包的构建脚本:如果首次安装因 "blocked build scripts" 报错,把 pnpm 打印出的那个 key 原样加到 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds` 下,再重跑同一条 `dsh plugin add` 即可。tarball 安装是预构建的,永远不需要这一步。
 
 bundle 的 `cordis.patch.yml` 会插入一行基线 `llm-qwen-local`(模型 `qwen3.8`,多模态 `true`,`off/low/medium/xhigh` 档位,默认 `xhigh`)。安装后在 Web UI 的模型选择器中选中该模型即可;适配器通过 `listModels()` 公告它。
 
