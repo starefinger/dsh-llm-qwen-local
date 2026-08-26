@@ -62,6 +62,24 @@ dsh --profile web --dump-config
 dsh --profile web
 ```
 
+### Version-pinned install (tag)
+
+Each compatibility snapshot is tagged with the dsh version it targets (`dsh-<dsh-version>`). To install a specific snapshot, append `#<tag>` to the git URL — pnpm resolves the tag to the exact commit, so the install is reproducible and independent of `main`'s current state:
+
+```sh
+# install the snapshot pinned to dsh 0.1.1-rc.2:
+dsh plugin --profile web add "git+https://github.com/starefinger/dsh-llm-qwen-local.git#dsh-0.1.1-rc.2"
+```
+
+Pick the tag matching your dsh version (`dsh --version`). After upgrading dsh, remove and re-add with the tag for the new version:
+
+```sh
+dsh plugin --profile web remove dsh-llm-qwen-local
+dsh plugin --profile web add "git+https://github.com/starefinger/dsh-llm-qwen-local.git#dsh-<new-dsh-version>"
+```
+
+Tags are immutable snapshots: a fix for an already-published tag ships as a new tag, never by moving an existing one.
+
 Git and local-path installs run the package's `prepare` script (→ `pnpm build`) to produce `lib/` during install. pnpm v10 blocks dependency build scripts until they are allowed: if the first install fails with a "blocked build scripts" notice, add the exact key pnpm printed under `allowBuilds` in the profile's `pnpm-workspace.yaml`, then re-run the same `dsh plugin add` command. The tarball install is prebuilt and never needs this.
 
 The bundle's `cordis.patch.yml` inserts a baseline `llm-qwen-local` line (model `qwen3.8`, `multimodal: true`, `off/low/medium/xhigh` efforts, default `xhigh`). Select the model in the Web UI's model selector once installed; the adapter advertises it through `listModels()`.

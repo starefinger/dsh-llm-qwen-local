@@ -60,6 +60,24 @@ dsh --profile web --dump-config
 dsh --profile web
 ```
 
+### 版本锁定安装(tag)
+
+每个兼容性快照都会以它对应的 dsh 版本号打 tag(格式 `dsh-<dsh版本号>`)。要安装某个特定快照,在 git URL 后追加 `#<tag>`——pnpm 会把 tag 解析到精确的 commit,安装结果可复现,且与 `main` 分支当前的状态无关:
+
+```sh
+# 安装锁定到 dsh 0.1.1-rc.2 的快照:
+dsh plugin --profile web add "git+https://github.com/starefinger/dsh-llm-qwen-local.git#dsh-0.1.1-rc.2"
+```
+
+选择与你 dsh 版本匹配的 tag(`dsh --version` 查看)。升级 dsh 后,先移除再用新版本的 tag 重新安装:
+
+```sh
+dsh plugin --profile web remove dsh-llm-qwen-local
+dsh plugin --profile web add "git+https://github.com/starefinger/dsh-llm-qwen-local.git#dsh-<新dsh版本号>"
+```
+
+tag 是不可变的快照:已发布 tag 的修复会以新 tag 发布,绝不移动已有 tag 的指向。
+
 git 与本地路径安装会在安装时运行包的 `prepare` 脚本(→ `pnpm build`)来生成 `lib/`。pnpm v10 默认拦截依赖包的构建脚本:如果首次安装因 "blocked build scripts" 报错,把 pnpm 打印出的那个 key 原样加到 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds` 下,再重跑同一条 `dsh plugin add` 即可。tarball 安装是预构建的,永远不需要这一步。
 
 bundle 的 `cordis.patch.yml` 会插入一行基线 `llm-qwen-local`(模型 `qwen3.8`,多模态 `true`,`off/low/medium/xhigh` 档位,默认 `xhigh`)。安装后在 Web UI 的模型选择器中选中该模型即可;适配器通过 `listModels()` 公告它。
