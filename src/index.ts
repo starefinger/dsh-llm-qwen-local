@@ -27,8 +27,9 @@
  *         multimodal: true
  *         reasoning:
  *           efforts:
- *             - { id: off, wire: null }
+ *             - { id: off, wire: none }
  *             - { id: low, wire: low }
+ *             - { id: medium, wire: medium }
  *             - { id: xhigh, wire: xhigh }
  *           defaultEffort: xhigh
  * ```

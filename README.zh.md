@@ -25,7 +25,7 @@
         multimodal: true
         reasoning:
           efforts:
-            - { id: off, wire: null }
+            - { id: off, wire: none }
             - { id: low, wire: low }
             - { id: medium, wire: medium }
             - { id: xhigh, wire: xhigh }
@@ -38,22 +38,26 @@
   `LlmAdapter.prepareCall` 缝与 harness 侧的纯文本模型图像投影),以及一个以
   OpenAI 兼容 API 服务你的 Qwen 模型的 vLLM 实例。
 - 带全局 `fetch` 的 Node.js(18+)。
+- 组合中挂载了 `@deepseek-ai/dsh-attachment` 的 profile——标准的 `web` 与
+  `headless` profile 都经由 `dsh-base` 挂载了它。适配器在请求时才惰性解析附件
+  服务(纯文本部署永远不会触碰它),但模块导入本身在插件加载时就会解析,因此
+  缺少该包的组合会在加载期失败。
 
 ## 安装
 
 ```sh
 # 从 git 安装(prepare 脚本会在安装时自动构建 lib/):
-dsh plugin --profile demo add github:starefinger/dsh-llm-qwen-local
+dsh plugin --profile web add github:starefinger/dsh-llm-qwen-local
 
 # 或从本地 checkout 安装(同样在安装时运行 prepare 构建):
-dsh plugin --profile demo add ./path/to/qwen3.8-LLM-plugin
+dsh plugin --profile web add ./path/to/qwen3.8-LLM-plugin
 
 # 或从打包好的 tarball 安装(预构建,安装时无需构建):
-dsh plugin --profile demo add ./dsh-llm-qwen-local-0.3.0.tgz
+dsh plugin --profile web add ./dsh-llm-qwen-local-0.3.0.tgz
 
 # 验证贡献的层,然后启动:
-dsh --profile demo --dump-config
-dsh --profile demo
+dsh --profile web --dump-config
+dsh --profile web
 ```
 
 git 与本地路径安装会在安装时运行包的 `prepare` 脚本(→ `pnpm build`)来生成 `lib/`。pnpm v10 默认拦截依赖包的构建脚本:如果首次安装因 "blocked build scripts" 报错,把 pnpm 打印出的那个 key 原样加到 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds` 下,再重跑同一条 `dsh plugin add` 即可。tarball 安装是预构建的,永远不需要这一步。

@@ -25,7 +25,7 @@ Plus, since the 0.1.1-rc.2 harness upgrade:
         multimodal: true
         reasoning:
           efforts:
-            - { id: off, wire: null }
+            - { id: off, wire: none }
             - { id: low, wire: low }
             - { id: medium, wire: medium }
             - { id: xhigh, wire: xhigh }
@@ -39,22 +39,27 @@ Plus, since the 0.1.1-rc.2 harness upgrade:
   projection introduced there), and a vLLM instance serving your Qwen model
   with the OpenAI-compatible API.
 - Node.js with global `fetch` (18+).
+- A profile whose composition mounts `@deepseek-ai/dsh-attachment` — the
+  standard `web` and `headless` profiles do, via `dsh-base`. The adapter
+  resolves the attachment service lazily at request time (a text-only
+  deployment never touches it), but the module import itself is resolved at
+  plugin load, so a composition without the package fails to load.
 
 ## Install
 
 ```sh
 # install from git (the prepare script builds lib/ on install):
-dsh plugin --profile demo add github:starefinger/dsh-llm-qwen-local
+dsh plugin --profile web add github:starefinger/dsh-llm-qwen-local
 
 # or from a local checkout (same prepare build runs on install):
-dsh plugin --profile demo add ./path/to/qwen3.8-LLM-plugin
+dsh plugin --profile web add ./path/to/qwen3.8-LLM-plugin
 
 # or from a packed tarball (prebuilt — no build step on install):
-dsh plugin --profile demo add ./dsh-llm-qwen-local-0.3.0.tgz
+dsh plugin --profile web add ./dsh-llm-qwen-local-0.3.0.tgz
 
 # verify the contributed layer, then start:
-dsh --profile demo --dump-config
-dsh --profile demo
+dsh --profile web --dump-config
+dsh --profile web
 ```
 
 Git and local-path installs run the package's `prepare` script (→ `pnpm build`) to produce `lib/` during install. pnpm v10 blocks dependency build scripts until they are allowed: if the first install fails with a "blocked build scripts" notice, add the exact key pnpm printed under `allowBuilds` in the profile's `pnpm-workspace.yaml`, then re-run the same `dsh plugin add` command. The tarball install is prebuilt and never needs this.
