@@ -1,0 +1,48 @@
+name: Publish to npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "npm dist-tag"
+        required: false
+        default: "latest"
+
+permissions:
+  contents: read
+  id-token: write # required for npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install, build, test
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm test
+
+      # First-time setup (once per npm account): register this repository as a
+      # trusted publisher at https://www.npmjs.com/package/dsh-llm-qwen-local/provenance
+      # so that --provenance below can mint the attestation.
+      - name: Publish
+        run: |
+          TAG="${{ inputs.tag || 'latest' }}"
+          if [ "$TAG" = "latest" ]; then
+            npm publish --registry https://registry.npmjs.org --provenance
+          else
+            npm publish --registry https://registry.npmjs.org --provenance --tag "$TAG"
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
