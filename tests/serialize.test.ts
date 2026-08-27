@@ -229,7 +229,7 @@ describe('serializeRequest: messages', () => {
     ])
   })
 
-  it('refuses an image inside a tool result', async () => {
+  it('refuses an image inside a tool result for a text-only model (direct-adapter defense)', async () => {
     const result = createToolResultMessage({
       callId: CallId('call-1'),
       content: [{
@@ -251,6 +251,100 @@ describe('serializeRequest: messages', () => {
     } catch (error) {
       expect((error as LlmError).failure.code).toBe('UNSUPPORTED_CONTENT')
     }
+  })
+
+  it('splits an image-only tool result into a text tool message plus a follow-up user image message', async () => {
+    const result = createToolResultMessage({
+      callId: CallId('call-1'),
+      content: [{
+        type: 'image',
+        attachment: {
+          attachmentId: AttachmentId('att-2'),
+          mediaType: 'image/png',
+          bytes: 3,
+          width: 1,
+          height: 1,
+        },
+      }],
+      isError: false,
+    })
+    const store = fakeStore()
+    const body = await serializeRequest(
+      options({ model: 'qwen3.8-vl', messages: [result] }),
+      MODEL_VISION,
+      store as unknown as AttachmentStore,
+    )
+    expect(body.messages).toEqual([
+      { role: 'tool', tool_call_id: 'call-1', content: '(no output)' },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Images returned by the tool call above are attached.' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } },
+        ],
+      },
+    ])
+    expect(store.calls).toHaveLength(1)
+    expect(store.calls[0]?.attachmentId).toBe(AttachmentId('att-2'))
+  })
+
+  it('keeps the tool result text and splits the images out for a multimodal model', async () => {
+    const result = createToolResultMessage({
+      callId: CallId('call-1'),
+      content: [
+        { type: 'text', text: 'rendered at 800x600' },
+        {
+          type: 'image',
+          attachment: {
+            attachmentId: AttachmentId('att-3'),
+            mediaType: 'image/png',
+            bytes: 3,
+            width: 1,
+            height: 1,
+          },
+        },
+      ],
+      isError: false,
+    })
+    const body = await serializeRequest(
+      options({ model: 'qwen3.8-vl', messages: [result] }),
+      MODEL_VISION,
+      fakeStore() as unknown as AttachmentStore,
+    )
+    expect(body.messages).toEqual([
+      { role: 'tool', tool_call_id: 'call-1', content: 'rendered at 800x600' },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Images returned by the tool call above are attached.' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } },
+        ],
+      },
+    ])
+  })
+
+  it('refuses a tool-result image when the attachment service is absent, even for a multimodal model', async () => {
+    const result = createToolResultMessage({
+      callId: CallId('call-1'),
+      content: [{
+        type: 'image',
+        attachment: {
+          attachmentId: AttachmentId('att-2'),
+          mediaType: 'image/png',
+          bytes: 3,
+          width: 1,
+          height: 1,
+        },
+      }],
+      isError: false,
+    })
+    let code = ''
+    try {
+      await serializeRequest(options({ model: 'qwen3.8-vl', messages: [result] }), MODEL_VISION, undefined)
+    } catch (error) {
+      code = (error as LlmError).failure.code
+    }
+    expect(code).toBe('UNSUPPORTED_CONTENT')
   })
 })
 

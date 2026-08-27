@@ -39,7 +39,14 @@
  * sets `preserveThinking: false` (in which case no reasoning is replayed).
  *
  * History replay: tool results become `role: 'tool'` messages with text-only
- * content (an image inside a tool result is refused, not silently erased).
+ * content. An image inside a tool result is SPLIT for a multimodal model:
+ * the tool message keeps its text (or the `(no output)` placeholder), and the
+ * image part(s) re-emerge in a follow-up `role: 'user'` multimodal message
+ * carrying a caption — the strict-OpenAI placement of tool-returned media
+ * (the QwenLM `qwen-code` `splitToolMedia` fix; their backends accept
+ * `image_url` parts in `user` messages only). A text-only model still refuses
+ * with `UNSUPPORTED_CONTENT` (defense in depth — the runtime projects such
+ * images to text placeholders before the adapter sees them).
  *
  * @module dsh-llm-qwen-local/serialize
  */
@@ -198,6 +205,68 @@ function flattenText(blocks: readonly ContentBlock[]): string {
     .join('')
 }
 
+/**
+ * Caption of the follow-up user message that carries images split out of
+ * tool results. The strict OpenAI placement the vLLM/Qwen wire enforces:
+ * tool-returned media cannot ride a `role: 'tool'` message (text-only
+ * content), so they re-emerge as `image_url` parts of a `role: 'user'`
+ * message directly after the tool message.
+ */
+const TOOL_IMAGE_CAPTION = 'Images returned by the tool call above are attached.'
+
+/**
+ * Split image parts out of tool results for a multimodal model: the
+ * tool message serializes text-only and the images re-emerge as parts of
+ * one follow-up `role: 'user'` multimodal message (caption first, then the
+ * image parts in tool-result order). Mirrors the QwenLM `qwen-code`
+ * `splitToolMedia` fix for strict OpenAI-compatible backends.
+ * @param result - one tool result from the harness history.
+ * @param model - the resolved model configuration.
+ * @param attachments - durable byte resolver, required when an image is present.
+ * @param signal - cancellation for attachment reads.
+ * @returns the text-only tool message plus the follow-up image message when any image was split.
+ * @throws LlmError `UNSUPPORTED_CONTENT` when an image is present without the attachment service.
+ */
+async function splitToolResultImages(
+  result: Extract<ContentBlock, { type: 'tool-result' }>,
+  model: QwenLocalModel,
+  attachments: AttachmentStore | undefined,
+  signal: AbortSignal | undefined,
+): Promise<WireMessage[]> {
+  const hasImage = result.content.some(block => block.type === 'image')
+  if (!hasImage) {
+    return [{
+      role: 'tool',
+      tool_call_id: result.toolCallId,
+      // Empty tool output still needs SOME content on the wire.
+      content: flattenText(result.content) || '(no output)',
+    }]
+  }
+  if (attachments === undefined) {
+    throw new LlmError(
+      `image input for model "${model.id}" requires the durable attachment service`,
+      'UNSUPPORTED_CONTENT',
+    )
+  }
+  const images = result.content.filter((block): block is ContentBlock & { type: 'image' } => block.type === 'image')
+  const parts = await serializeParts(
+    [{ type: 'text', text: TOOL_IMAGE_CAPTION }, ...images],
+    model,
+    attachments,
+    signal,
+  )
+  return [
+    {
+      role: 'tool',
+      tool_call_id: result.toolCallId,
+      // The tool's text survives the split; an image-only result gets the
+      // placeholder (a tool message always carries SOME content on the wire).
+      content: flattenText(result.content) || '(no output)',
+    },
+    { role: 'user', content: parts },
+  ]
+}
+
 /** Refuse image content on a path the wire format cannot carry for this model. */
 function assertNoImage(blocks: readonly ContentBlock[], model: QwenLocalModel, where: string): void {
   if (contentHasImage(blocks)) {
@@ -329,13 +398,23 @@ export async function serializeMessages(
       }
     }
     for (const result of toolResults) {
-      assertNoImage(result.content, model, 'inside tool results')
-      wire.push({
-        role: 'tool',
-        tool_call_id: result.toolCallId,
-        // Empty tool output still needs SOME content on the wire.
-        content: flattenText(result.content) || '(no output)',
-      })
+      if (model.multimodal) {
+        // Strict-OpenAI placement: the image parts split into a follow-up
+        // user message, the tool message stays text-only. A text-only tool
+        // result needs no attachment service at all.
+        wire.push(...await splitToolResultImages(result, model, attachments, signal))
+      } else {
+        // Defense in depth for direct (non-runtime) use: the runtime
+        // projects images to text placeholders before a text-only adapter
+        // sees them, so this gate catches out-of-runtime histories only.
+        assertNoImage(result.content, model, 'inside tool results')
+        wire.push({
+          role: 'tool',
+          tool_call_id: result.toolCallId,
+          // Empty tool output still needs SOME content on the wire.
+          content: flattenText(result.content) || '(no output)',
+        })
+      }
     }
   }
   return wire

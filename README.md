@@ -1,8 +1,16 @@
 # dsh-llm-qwen-local
 
-English | [中文](README.zh.md)
+English | [简体中文](README.zh.md)
 
-DeepSeek Harness LLM adapter plugin for a **locally deployed Qwen model** (e.g. Qwen3.8) served by **vLLM** behind its OpenAI-compatible `/v1/chat/completions` endpoint.
+![Qwen 本地 (vLLM) settings page](docs/assets/setting.png)
+
+DeepSeek Harness LLM adapter plugin for a **locally deployed Qwen model** (e.g. Qwen3.8-27B) served by **vLLM** behind its OpenAI-compatible `/v1/chat/completions` endpoint.
+
+> **v0.3.0** · exact compatibility target: DSH `0.1.1-rc.2` · MIT · community-maintained and not a DeepSeek or Qwen product.
+
+```sh
+dsh plugin --profile web add github:starefinger/dsh-llm-qwen-local
+```
 
 Two deployment-specific knobs are first-class:
 
@@ -86,6 +94,24 @@ The bundle's `cordis.patch.yml` inserts a baseline `llm-qwen-local` line (model 
 
 To change anything, override the line from your profile's `cordis.patch.yml` by `id: llm-qwen-local` — a patch replaces the target line's **entire** `config` (no deep merge), so restate every key you keep.
 
+## Quick start
+
+Install, then select the model in the Web UI's model selector — the baseline `qwen3.8` entry appears under its **Qwen (local)** provider group:
+
+![Model selector with Qwen3.8-27B (local) selected](docs/assets/use_guide_1.png)
+
+Click the input footer (model name + effort, e.g. `Qwen3.8-27B (local) xhigh`) to switch the session model or the per-request **reasoning level** (the levels your config declares, e.g. `off` / `low` / `medium` / `xhigh`):
+
+![Reasoning level menu opened from the input footer](docs/assets/use_guide_2.png)
+
+Everything else is edited on the **Settings → Qwen 本地 (vLLM)** page (the node-side section `llm-qwen-local`): endpoint, optional API key (stored in the host credentials service, never in `settings.yaml`), and one card per model — id, display name, context window, output cap, image budgets, the multimodal switch, thinking preservation, and the reasoning-effort table:
+
+![Settings page: endpoint, image budget, API key, and the model card](docs/assets/setting.png)
+
+![Settings page: reasoning-effort table, default level, and the discover/save actions](docs/assets/setting2.png)
+
+Saving applies **live** — the adapter re-resolves per request, so a saved change reaches the next model call without a restart.
+
 ## Configuration reference
 
 All fields except `models` are optional in `cordis.yml`; schema defaults fill the rest.
@@ -120,7 +146,7 @@ All fields except `models` are optional in `cordis.yml`; schema defaults fill th
 `multimodal` is a **claim about your endpoint, not a check of it** — nothing interrogates vLLM for what it accepts. Since the 0.1.1-rc.2 harness upgrade, the harness LLM runtime itself handles the under-claim case:
 
 - `false` (default): the model is advertised text-only (`inputModalities: ['text']`). The harness runtime now **projects** images into a deterministic text placeholder (`[image omitted because this model accepts text only; attachment sha256:…]`) **before the adapter sees them** — the request proceeds text-only instead of being refused. The adapter keeps its own `UNSUPPORTED_CONTENT` gate at serialization time for direct (non-runtime) use and for history assembled outside the runtime projection.
-- `true`: the model is advertised with `['text', 'image']`. Image bytes are resolved through the durable attachment service (`ctx.attachments`); a composition without that service refuses any image with `UNSUPPORTED_CONTENT` instead of guessing a source.
+- `true`: the model is advertised with `['text', 'image']`. Image bytes are resolved through the durable attachment service (`ctx.attachments`); a composition without that service refuses any image with `UNSUPPORTED_CONTENT` instead of guessing a source. **Tool-returned images are split, not refused** (below): the strict OpenAI placement the wire enforces is that `image_url` parts may ride a `user` message only, so a tool result containing image parts serializes as a text-only `role: 'tool'` message followed by a `role: 'user'` multimodal message carrying a caption and the image parts (the QwenLM `qwen-code` `splitToolMedia` shape).
 
 The two wrong answers do not cost the same: **over-claiming** admits an image the provider then rejects **mid-turn**, after the message is durable in the session log — that session will keep re-sending the failing image. Recovery is a new session, a fork before the image, or a different model; rolling an unconsumed image message back out of a failed send is deferred. **Under-claiming** no longer fails loud: the image silently becomes the placeholder above — the model still answers, but cannot see the image (recovery: flip the switch, then re-ask). The direct-adapter gate (`UNSUPPORTED_CONTENT`, naming the model) still fires for callers that bypass the runtime projection.
 
@@ -154,7 +180,7 @@ Request: `model`, `messages` (system first; multimodal user messages as `content
 
 Response: SSE `data:` payloads, `data: [DONE]` sentinel. `delta.reasoning_content` (and the `delta.reasoning` spelling some frameworks emit) → harness `reasoning` blocks (Qwen thinking channel); `delta.content` → `text` blocks; `delta.tool_calls` → `tool-call` blocks with raw-JSON `argumentsDelta`. `finish_reason`: `stop`/`content_filter` → `stop`, `length` → `max-tokens`, `tool_calls` → `tool-calls`, anything else → an `error` finish. Usage arrives attached to the finish chunk and/or as a trailing usage-only chunk; both are buffered and flushed after all `block-end`s and before `finish` (nothing is emitted after `finish`).
 
-History replay: with `preserve_thinking` at its template default (ON), assistant reasoning is replayed as `reasoning_content` on tool-call-free turns — the exact reconstruction the official Qwen3.8 example performs; tool-call turns and `preserveThinking: false` models send no reasoning. Tool calls replay as `tool_calls` with `content: ""` (never `null`).
+History replay: with `preserve_thinking` at its template default (ON), assistant reasoning is replayed as `reasoning_content` on tool-call-free turns — the exact reconstruction the official Qwen3.8 example performs; tool-call turns and `preserveThinking: false` models send no reasoning. Tool calls replay as `tool_calls` with `content: ""` (never `null`). Tool results serialize as text-only `role: 'tool'` messages; for a multimodal model, image parts inside a tool result are split into a follow-up `role: 'user'` multimodal message (caption + `image_url` parts), which also un-poisons history that an older plugin build would have refused forever.
 
 ## Model parameters (Qwen3.8-27B, verified against the model card)
 
@@ -281,23 +307,39 @@ change.
 
 Every provider request carries the harness `attributionHeaders()`; `options.signal` is honored through fetch and body reads.
 
+## Known Limitations and Deferred Work
+
+- **A modality declaration is not verified** — `multimodal: true` on a text-only endpoint fails mid-turn after the image message is durable (recovery: new session / fork / other model). The reverse direction is now **silent**: `multimodal: false` on a vision endpoint makes the runtime project images into text placeholders, so the model answers without seeing them (flip the switch and re-ask).
+- **Request-image projection is provider-dependent** — when the mounted attachment provider cannot derive request images (`ATTACHMENT_PROJECTION_UNSUPPORTED`), the adapter falls back to the normalized master bytes, so `imageMaxPixels`/`imageMaxBytes` become advisory for that deployment.
+- **Tool-result images ride a follow-up user message** — the vLLM wire's `role: 'tool'` content is text-only, so for a multimodal model an image inside a tool result is split: the tool message keeps its text and the image part(s) re-emerge in a `role: 'user'` multimodal message directly after it (caption: "Images returned by the tool call above are attached."). A text-only model still refuses a tool-result image with `UNSUPPORTED_CONTENT` (direct-adapter defense; the runtime projects such images to placeholders first).
+- **No `replayState`** — the endpoint is stateless and history replays cleanly from recorded blocks (reasoning included, via `preserve_thinking`), so the adapter emits no adapter-private replay metadata.
+- **No per-route retry policy** — v1 has no `retryPolicy` config; the harness normal defaults apply.
+- **Thinking replay is tool-call-turn-free only** — reasoning is replayed as `reasoning_content` only on assistant turns with no tool calls (the official Qwen3.8 example's shape); a deployment that wants thinking retained across tool-call turns needs a template-level change.
+- **Video input is unsupported** — Qwen3.8-27B accepts `video_url` parts, but the harness has no video content block, so only `image` is wired; a deployment that needs video would need a new harness content block plus a `video_url` serializer path.
+- **Assistant-side images are rejected** — the harness image block is user-content-only in practice; assistant/system image content is refused rather than silently erased (tool-result images on a multimodal model take the split path above instead).
+
+## What this plugin does not claim
+
+- It is not an official DeepSeek or Qwen/Alibaba product and does not imply endorsement.
+- It does not interrogate the vLLM endpoint — `multimodal`, context capacity, and reasoning levels are **claims about your deployment**, and a wrong claim costs a mid-turn refusal (or, for under-claimed vision, a silent text-only projection) rather than a negotiated capability.
+- It does not support DashScope / Qwen Cloud or any non-OpenAI-compatible Qwen endpoint; the target is a local vLLM (or compatible) server.
+- It does not extend image understanding to video, audio, PDF, or image generation.
+- It does not replace DSH's session log, attachment pipeline, or model selector; it contributes one LLM route, one settings section, and one settings page.
+
 ## Development
 
 ```sh
 pnpm install
-pnpm build     # tsc → lib/
+pnpm build     # tsc → lib/ + client bundle
+pnpm typecheck
 pnpm test      # vitest: serialization, translation, e2e against a mock vLLM
 ```
 
 Tests run against a scripted in-process vLLM (SSE) mock — no real model or endpoint is required.
 
-## Known Limitations and Deferred Work
+## License
 
-- **A modality declaration is not verified** — `multimodal: true` on a text-only endpoint fails mid-turn after the image message is durable (recovery: new session / fork / other model). The reverse direction is now **silent**: `multimodal: false` on a vision endpoint makes the runtime project images into text placeholders, so the model answers without seeing them (flip the switch and re-ask).
-- **Request-image projection is provider-dependent** — when the mounted attachment provider cannot derive request images (`ATTACHMENT_PROJECTION_UNSUPPORTED`), the adapter falls back to the normalized master bytes, so `imageMaxPixels`/`imageMaxBytes` become advisory for that deployment.
-- **No image inside tool results** — vLLM `role: 'tool'` content is text-only; an image there is refused with `UNSUPPORTED_CONTENT`.
-- **No `replayState`** — the endpoint is stateless and history replays cleanly from recorded blocks (reasoning included, via `preserve_thinking`), so the adapter emits no adapter-private replay metadata.
-- **No per-route retry policy** — v1 has no `retryPolicy` config; the harness normal defaults apply.
-- **Thinking replay is tool-call-turn-free only** — reasoning is replayed as `reasoning_content` only on assistant turns with no tool calls (the official Qwen3.8 example's shape); a deployment that wants thinking retained across tool-call turns needs a template-level change.
-- **Video input is unsupported** — Qwen3.8-27B accepts `video_url` parts, but the harness has no video content block, so only `image` is wired; a deployment that needs video would need a new harness content block plus a `video_url` serializer path.
-- **Assistant-side images are rejected** — the harness image block is user-content-only in practice; assistant/tool/system image content is refused rather than silently erased.
+This repository is licensed under [MIT](LICENSE).
+
+The plugin depends only on MIT-licensed runtime packages (`@deepseek-ai/schemastery`, `eventsource-parser`); its development toolchain includes TypeScript (Apache-2.0) among other MIT-licensed tools. No DeepSeek Harness or Qwen source is vendored into this repository. The Qwen3.8-27B model weights and the DSH product remain subject to their own upstream terms; this plugin is a community project and is not an official DeepSeek or Qwen/Alibaba product.
+

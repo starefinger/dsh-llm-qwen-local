@@ -458,6 +458,56 @@ describe('QwenLocalAdapter e2e (mock vLLM)', () => {
     await mock.close()
   })
 
+  it('splits a tool-result image into a follow-up user message on the wire (full round trip)', async () => {
+    const mock = tracked(await startMockVllm((res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      frame(res, { choices: [{ delta: { content: 'a chart' }, finish_reason: 'stop' }] })
+      frame(res, { choices: [], usage: { prompt_tokens: 5, completion_tokens: 2 } })
+      frame(res, '[DONE]')
+      res.end()
+    }))
+    const store = {
+      readImage: async (ref: ImageAttachmentRef) => ({ ref, data: new Uint8Array([1, 2, 3]) }),
+    } as unknown as AttachmentStore
+    const adapter = adapterFor({ ...BASE_CONFIG, baseURL: mock.url }, () => store)
+    const assistantMessage = createAssistantMessage({
+      content: [{
+        type: 'tool-call',
+        id: CallId('call-1'),
+        name: 'render_chart',
+        arguments: '{"title":"sales"}',
+      }],
+      source: { provider: 'qwen-local', model: 'qwen3.8' },
+    })
+    const result = createToolResultMessage({
+      callId: CallId('call-1'),
+      content: [
+        { type: 'text', text: 'rendered at 800x600' },
+        {
+          type: 'image',
+          attachment: {
+            attachmentId: AttachmentId('att-chart'),
+            mediaType: 'image/png',
+            bytes: 3,
+            width: 800,
+            height: 600,
+          },
+        },
+      ],
+      isError: false,
+    })
+    await drain(adapter.stream(options({ messages: [assistantMessage, result] })))
+    expect(mock.requests[0]?.body.messages).toEqual([
+      { role: 'assistant', content: '', tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'render_chart', arguments: '{"title":"sales"}' } }] },
+      { role: 'tool', tool_call_id: 'call-1', content: 'rendered at 800x600' },
+      { role: 'user', content: [
+        { type: 'text', text: 'Images returned by the tool call above are attached.' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } },
+      ] },
+    ])
+    await mock.close()
+  })
+
   it('binds prepareCall to one connection generation (a settings change cannot mix generations)', async () => {
     const first = tracked(await startMockVllm((res) => {
       res.writeHead(200, { 'content-type': 'text/event-stream' })

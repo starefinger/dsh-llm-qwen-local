@@ -1,8 +1,16 @@
 # dsh-llm-qwen-local
 
-[English](README.md) | 中文
+[English](README.md) | 简体中文
 
-用于**本地部署的 Qwen 模型**(如 Qwen3.8)的 DeepSeek Harness LLM 适配器插件,由 **vLLM** 以其 OpenAI 兼容的 `/v1/chat/completions` 端点提供服务。
+![Qwen 本地 (vLLM) 设置页](docs/assets/setting.png)
+
+用于**本地部署的 Qwen 模型**(如 Qwen3.8-27B)的 DeepSeek Harness LLM 适配器插件,由 **vLLM** 以其 OpenAI 兼容的 `/v1/chat/completions` 端点提供服务。
+
+> **v0.3.0** · 精确兼容目标:DSH `0.1.1-rc.2` · MIT · 社区维护,非 DeepSeek 或 Qwen 官方产品。
+
+```sh
+dsh plugin --profile web add github:starefinger/dsh-llm-qwen-local
+```
 
 两个部署相关的一等公民配置项:
 
@@ -84,6 +92,24 @@ bundle 的 `cordis.patch.yml` 会插入一行基线 `llm-qwen-local`(模型 `qwe
 
 要修改任何配置,在你的 profile 的 `cordis.patch.yml` 中按 `id: llm-qwen-local` 覆盖该行——patch 会替换目标行的**整个** `config`(不做深度合并),所以保留的每个键都要重新写一遍。
 
+## 快速上手
+
+安装后,在 Web UI 的模型选择器中选中该模型——基线 `qwen3.8` 条目出现在 **Qwen (local)** 提供商分组下:
+
+![模型选择器:已选中 Qwen3.8-27B (local)](docs/assets/use_guide_1.png)
+
+点击输入框底部(模型名 + 档位,如 `Qwen3.8-27B (local) xhigh`)可切换会话模型或按请求选择**推理等级**(你配置中声明的档位,如 `off` / `low` / `medium` / `xhigh`):
+
+![从输入框底部打开的推理等级菜单](docs/assets/use_guide_2.png)
+
+其余所有配置都在 **设置 → Qwen 本地 (vLLM)** 页面编辑(节点侧 section 即 `llm-qwen-local`):端点、可选 API Key(存入宿主凭据服务,绝不写入 `settings.yaml`)、以及每个模型一张卡片——id、显示名、上下文窗口、输出上限、图像预算、多模态开关、历史思考保留、推理档位表:
+
+![设置页:端点、图像预算、API Key 与模型卡片](docs/assets/setting.png)
+
+![设置页:推理档位表、默认档位与发现/保存操作](docs/assets/setting2.png)
+
+保存后**即时生效**——适配器按请求重新解析,保存的变更在下次模型调用时即到达,无需重启。
+
 ## 配置参考
 
 除 `models` 外,所有字段在 `cordis.yml` 中都是可选的;其余由 schema 默认值填充。
@@ -118,7 +144,7 @@ bundle 的 `cordis.patch.yml` 会插入一行基线 `llm-qwen-local`(模型 `qwe
 `multimodal` 是**关于你端点的声明,而非对端点的检查**——没有任何东西去询问 vLLM 接受什么。自 0.1.1-rc.2 harness 升级起,harness 的 LLM 运行时自己处理"低报"的情形:
 
 - `false`(默认):模型以纯文本公告(`inputModalities: ['text']`)。harness 运行时现在会把图像**投影**为确定性的文本占位符(`[image omitted because this model accepts text only; attachment sha256:…]`),发生在**适配器看到之前**——请求以纯文本继续,而不是被拒绝。适配器在序列化时仍保留自己的 `UNSUPPORTED_CONTENT` 门禁,覆盖直接使用(非运行时)与运行时投影之外组装的历史。
-- `true`:模型以 `['text', 'image']` 公告。图像字节通过持久附件服务(`ctx.attachments`)解析;没有该服务的组合会对任何图像以 `UNSUPPORTED_CONTENT` 拒绝,而不是猜测来源。
+- `true`:模型以 `['text', 'image']` 公告。图像字节通过持久附件服务(`ctx.attachments`)解析;没有该服务的组合会对任何图像以 `UNSUPPORTED_CONTENT` 拒绝,而不是猜测来源。**工具返回的图像会被拆分而非拒绝**(见下):wire 强制的严格 OpenAI 摆位是 `image_url` 部件只能搭乘 `user` 消息,所以含图像部件的工具结果序列化为纯文本的 `role: 'tool'` 消息,紧跟一条携带说明文字与图像部件的 `role: 'user'` 多模态消息(QwenLM `qwen-code` 的 `splitToolMedia` 形态)。
 
 两种声明错误的代价不同:**高报**会接受一张提供方随后**在回合中途**拒绝的图像——此时消息已持久化进会话日志——该会话会反复重发这张失败的图像。恢复途径是新建会话、在图像之前分叉、或换一个模型;把未被消费的图像消息从失败的发送中回滚是推迟事项。**低报**不再大声失败:图像静默变成上面的占位符——模型仍然作答,但看不到图像(恢复:拨动开关后重新提问)。绕过运行时投影的调用方仍会触发直接适配器门禁(`UNSUPPORTED_CONTENT`,并指明模型名)。
 
@@ -152,7 +178,7 @@ reasoning:
 
 响应:SSE `data:` 载荷,以 `data: [DONE]` 哨兵结尾。`delta.reasoning_content`(以及部分框架发出的 `delta.reasoning` 拼写)→ harness `reasoning` 块(Qwen 思考通道);`delta.content` → `text` 块;`delta.tool_calls` → `tool-call` 块,`argumentsDelta` 为原始 JSON。`finish_reason`:`stop`/`content_filter` → `stop`,`length` → `max-tokens`,`tool_calls` → `tool-calls`,其余 → `error` finish。usage 附着在 finish 块上和/或以末尾单独的 usage-only 块到达;两者都被缓冲,在所有 `block-end` 之后、`finish` 之前冲刷(`finish` 之后不发射任何东西)。
 
-历史回放:`preserve_thinking` 处于模板默认(开)时,助手推理在无工具调用的回合以 `reasoning_content` 回放——正是官方 Qwen3.8 示例所做的那种重构;含工具调用的回合与 `preserveThinking: false` 的模型不发送推理。工具调用以 `tool_calls` 回放,`content: ""`(绝不 `null`)。
+历史回放:`preserve_thinking` 处于模板默认(开)时,助手推理在无工具调用的回合以 `reasoning_content` 回放——正是官方 Qwen3.8 示例所做的那种重构;含工具调用的回合与 `preserveThinking: false` 的模型不发送推理。工具调用以 `tool_calls` 回放,`content: ""`(绝不 `null`)。工具结果序列化为纯文本的 `role: 'tool'` 消息;对多模态模型,工具结果内的图像部件被拆到紧随其后的 `role: 'user'` 多模态消息(说明文字 + `image_url` 部件)——这也让旧版本插件曾永久拒绝的历史(被"毒化"的会话)在新版本下自动恢复。
 
 ## 模型参数(Qwen3.8-27B,对照模型卡片核实)
 
@@ -258,23 +284,38 @@ settings.yaml 中编辑"提示——Models 页没有第三方编辑器卡片的�
 
 每个提供方请求都携带 harness 的 `attributionHeaders()`;`options.signal` 贯穿 fetch 与正文读取被遵守。
 
+## 已知限制与推迟事项
+
+- **模态声明不受校验**——纯文本端点上设 `multimodal: true` 会在图像消息持久化后于回合中途失败(恢复:新会话 / 分叉 / 换模型)。反方向现在是**静默**的:视觉端点上设 `multimodal: false` 会让运行时把图像投影为文本占位符,模型作答但看不到图像(拨动开关后重新提问)。
+- **请求图像投影依赖提供方**——当挂载的附件提供方无法派生请求图像(`ATTACHMENT_PROJECTION_UNSUPPORTED`)时,适配器回退到归一化主字节,该部署下 `imageMaxPixels`/`imageMaxBytes` 变为建议值。
+- **工具结果内的图像搭乘后续用户消息**——vLLM wire 的 `role: 'tool'` 内容为纯文本,所以多模态模型的工具结果含图时执行拆分:工具消息保留文本,图像部件紧随其后出现在一条 `role: 'user'` 多模态消息中(说明文字:"Images returned by the tool call above are attached.")。纯文本模型仍对工具结果内的图像以 `UNSUPPORTED_CONTENT` 拒绝(直接适配器防御;运行时会先把此类图像投影为占位符)。
+- **无 `replayState`**——端点无状态,历史从记录的块(含推理,经 `preserve_thinking`)干净回放,所以适配器不发出适配器私有的回放元数据。
+- **无按路由的重试策略**——v1 没有 `retryPolicy` 配置;应用 harness 的正常默认值。
+- **思考回放仅限无工具调用的回合**——推理只在无工具调用的助手回合以 `reasoning_content` 回放(官方 Qwen3.8 示例的形状);希望在工具调用回合也保留思考的部署需要模板级改动。
+- **不支持视频输入**——Qwen3.8-27B 接受 `video_url` 部件,但 harness 没有视频内容块,所以只接了 `image`;需要视频的部署需要新的 harness 内容块外加 `video_url` 序列化路径。
+- **拒绝助手侧图像**——harness 图像块在实践中仅限用户内容;助手/系统侧的图像内容被拒绝,而不是静默抹除(工具结果侧的多模态模型走上述拆分路径)。
+
+## 本插件不声称
+
+- 它不是 DeepSeek 或 Qwen/阿里巴巴的官方产品,也不暗示官方背书。
+- 它不询问 vLLM 端点——`multimodal`、上下文容量、推理档位都是**关于你部署的声明**,声明错误的代价是回合中途的拒绝(或对低报视觉能力的静默纯文本投影),而不是协商出的能力。
+- 它不支持 DashScope / 通义云或任何非 OpenAI 兼容的 Qwen 端点;目标是本地 vLLM(或兼容)服务。
+- 它不把图像理解扩展到视频、音频、PDF 或图像生成。
+- 它不替换 DSH 的会话日志、附件管线或模型选择器;它贡献一条 LLM 路由、一个设置 section 和一个设置页面。
+
 ## 开发
 
 ```sh
 pnpm install
-pnpm build     # tsc → lib/
+pnpm build     # tsc → lib/ + 客户端 bundle
+pnpm typecheck
 pnpm test      # vitest: 序列化、翻译、对 mock vLLM 的 e2e
 ```
 
 测试针对脚本化的进程内 vLLM(SSE)mock 运行——不需要真实模型或端点。
 
-## 已知限制与推迟事项
+## 许可
 
-- **模态声明不受校验**——纯文本端点上设 `multimodal: true` 会在图像消息持久化后于回合中途失败(恢复:新会话 / 分叉 / 换模型)。反方向现在是**静默**的:视觉端点上设 `multimodal: false` 会让运行时把图像投影为文本占位符,模型作答但看不到图像(拨动开关后重新提问)。
-- **请求图像投影依赖提供方**——当挂载的附件提供方无法派生请求图像(`ATTACHMENT_PROJECTION_UNSUPPORTED`)时,适配器回退到归一化主字节,该部署下 `imageMaxPixels`/`imageMaxBytes` 变为建议值。
-- **工具结果内不含图像**——vLLM `role: 'tool'` 内容为纯文本;其中的图像以 `UNSUPPORTED_CONTENT` 拒绝。
-- **无 `replayState`**——端点无状态,历史从记录的块(含推理,经 `preserve_thinking`)干净回放,所以适配器不发出适配器私有的回放元数据。
-- **无按路由的重试策略**——v1 没有 `retryPolicy` 配置;应用 harness 的正常默认值。
-- **思考回放仅限无工具调用的回合**——推理只在无工具调用的助手回合以 `reasoning_content` 回放(官方 Qwen3.8 示例的形状);希望在工具调用回合也保留思考的部署需要模板级改动。
-- **不支持视频输入**——Qwen3.8-27B 接受 `video_url` 部件,但 harness 没有视频内容块,所以只接了 `image`;需要视频的部署需要新的 harness 内容块外加 `video_url` 序列化路径。
-- **拒绝助手侧图像**——harness 图像块在实践中仅限用户内容;助手/工具/系统侧的图像内容被拒绝,而不是静默抹除。
+本仓库以 [MIT](LICENSE) 许可发布。
+
+插件运行时仅依赖 MIT 许可的包(`@deepseek-ai/schemastery`、`eventsource-parser`);开发工具链中包含 TypeScript(Apache-2.0)及其他 MIT 许可工具。本仓库未打包(vendor)任何 DeepSeek Harness 或 Qwen 源码。Qwen3.8-27B 模型权重与 DSH 产品各自受其上游条款约束;本插件为社区项目,非 DeepSeek 或 Qwen/阿里巴巴官方产品。

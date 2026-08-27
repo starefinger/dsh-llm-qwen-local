@@ -12,7 +12,10 @@
  *   { enable_thinking: false }` on the Qwen chat template; omitting
  *   `reasoning_effort` alone keeps the template's thinking default.
  * - Vision models accept `image_url` parts with data-URL values inside a
- *   user message's `content` array.
+ *   user message's `content` array ONLY — strict OpenAI placement.
+ *   `role: 'tool'` content is text-only, so tool-returned media re-emerge in
+ *   a follow-up `role: 'user'` multimodal message (the QwenLM `qwen-code`
+ *   `splitToolMedia` shape; `serialize.ts` performs the split).
  * - `stream_options: { include_usage: true }` puts the usage block on a
  *   trailing chunk before `[DONE]`.
  *
