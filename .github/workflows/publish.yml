@@ -51,6 +51,7 @@ jobs:
           USERCONFIG="$HOME/.npmrc-ci-publish"
           printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$USERCONFIG"
           chmod 600 "$USERCONFIG"
+          npm whoami --registry https://registry.npmjs.org --userconfig "$USERCONFIG" || echo "whoami: token invalid or expired"
           TAG="${{ inputs.tag || 'latest' }}"
           if [ "$TAG" = "latest" ]; then
             npm publish --registry https://registry.npmjs.org --userconfig "$USERCONFIG"
