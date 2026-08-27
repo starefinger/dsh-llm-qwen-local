@@ -54,6 +54,9 @@ dsh plugin --profile web add github:starefinger/dsh-llm-qwen-local
 ## 安装
 
 ```sh
+# 从 npm 安装(推荐——预构建,安装时无需构建):
+dsh plugin --profile web add dsh-llm-qwen-local
+
 # 从 git 安装(prepare 脚本会在安装时自动构建 lib/):
 dsh plugin --profile web add github:starefinger/dsh-llm-qwen-local
 
@@ -61,7 +64,7 @@ dsh plugin --profile web add github:starefinger/dsh-llm-qwen-local
 dsh plugin --profile web add ./path/to/qwen3.8-LLM-plugin
 
 # 或从打包好的 tarball 安装(预构建,安装时无需构建):
-dsh plugin --profile web add ./dsh-llm-qwen-local-0.3.0.tgz
+dsh plugin --profile web add ./dsh-llm-qwen-local-0.3.1.tgz
 
 # 验证贡献的层,然后启动:
 dsh --profile web --dump-config
@@ -70,21 +73,21 @@ dsh --profile web
 
 ### 版本锁定安装(tag)
 
-每个兼容性快照都会以它对应的 dsh 版本号打 tag(格式 `dsh-<dsh版本号>`)。要安装某个特定快照,在 git URL 后追加 `#<tag>`——pnpm 会把 tag 解析到精确的 commit,安装结果可复现,且与 `main` 分支当前的状态无关:
+每个兼容性快照都会以它对应的 dsh 版本号打 tag。0.3.1 及之后的快照使用 `dsh-<dsh版本号>-plugin-<插件版本号>` 格式(dsh 版本在前,插件版本作后缀);更早的快照使用不带后缀的 `dsh-<dsh版本号>` 格式。**同一个 dsh 版本可能存在多个 tag——请使用插件版本号后缀最大的那个:它是支持你的 dsh 的最新快照。** 要安装某个特定快照,在 git URL 后追加 `#<tag>`——pnpm 会把 tag 解析到精确的 commit,安装结果可复现,且与 `main` 分支当前的状态无关:
 
 ```sh
-# 安装锁定到 dsh 0.1.1-rc.2 的快照:
-dsh plugin --profile web add "git+https://github.com/starefinger/dsh-llm-qwen-local.git#dsh-0.1.1-rc.2"
+# 安装 dsh 0.1.1-rc.2 的最新快照(插件 0.3.1):
+dsh plugin --profile web add "git+https://github.com/starefinger/dsh-llm-qwen-local.git#dsh-0.1.1-rc.2-plugin-0.3.1"
 ```
 
-选择与你 dsh 版本匹配的 tag(`dsh --version` 查看)。升级 dsh 后,先移除再用新版本的 tag 重新安装:
+选择与你 dsh 版本匹配的 tag(`dsh --version` 查看)——同一个 dsh 版本有多个 tag 时,取插件版本号后缀最大的。升级 dsh 后,先移除再用新版本的 tag 重新安装:
 
 ```sh
 dsh plugin --profile web remove dsh-llm-qwen-local
-dsh plugin --profile web add "git+https://github.com/starefinger/dsh-llm-qwen-local.git#dsh-<新dsh版本号>"
+dsh plugin --profile web add "git+https://github.com/starefinger/dsh-llm-qwen-local.git#dsh-<新dsh版本号>-plugin-<插件版本号>"
 ```
 
-tag 是不可变的快照:已发布 tag 的修复会以新 tag 发布,绝不移动已有 tag 的指向。
+tag 是不可变的快照:已发布 tag 的修复会以新 tag 发布(同一 dsh 版本下插件版本号后缀更大的新 tag),绝不移动已有 tag 的指向。
 
 git 与本地路径安装会在安装时运行包的 `prepare` 脚本(→ `pnpm build`)来生成 `lib/`。pnpm v10 默认拦截依赖包的构建脚本:如果首次安装因 "blocked build scripts" 报错,把 pnpm 打印出的那个 key 原样加到 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds` 下,再重跑同一条 `dsh plugin add` 即可。tarball 安装是预构建的,永远不需要这一步。
 
