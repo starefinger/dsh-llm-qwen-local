@@ -28,11 +28,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: pnpm
 
+      # No pnpm cache / frozen lockfile: the repository gitignores
+      # pnpm-lock.yaml by design.
       - name: Install, build, test
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm build
           pnpm test
 
