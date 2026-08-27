@@ -10,7 +10,10 @@ on:
 
 permissions:
   contents: read
-  id-token: write # required for npm provenance
+  # Enable id-token: write AND re-add --provenance below once the package
+  # exists and a trusted publisher is registered at
+  # https://www.npmjs.com/package/dsh-llm-qwen-local/provenance
+  # (repo: starefinger/dsh-llm-qwen-local, workflow: publish.yml).
 
 jobs:
   publish:
@@ -33,16 +36,13 @@ jobs:
           pnpm build
           pnpm test
 
-      # First-time setup (once per npm account): register this repository as a
-      # trusted publisher at https://www.npmjs.com/package/dsh-llm-qwen-local/provenance
-      # so that --provenance below can mint the attestation.
       - name: Publish
         run: |
           TAG="${{ inputs.tag || 'latest' }}"
           if [ "$TAG" = "latest" ]; then
-            npm publish --registry https://registry.npmjs.org --provenance
+            npm publish --registry https://registry.npmjs.org
           else
-            npm publish --registry https://registry.npmjs.org --provenance --tag "$TAG"
+            npm publish --registry https://registry.npmjs.org --tag "$TAG"
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
