@@ -10,7 +10,7 @@
  * @module dsh-llm-qwen-local/translate
  */
 
-import { CallId, EMPTY_RESPONSE_CODE, LlmError } from '@deepseek-ai/dsh-llm'
+import { EMPTY_RESPONSE_CODE, LlmError, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, FinishReason, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { DONE } from './sse.js'
 import type { WireChunk, WireUsage } from './wire.js'
@@ -78,7 +78,7 @@ function closeBlock(block: OpenBlock): ContentBlock {
     case 'tool-call':
       return {
         type: 'tool-call',
-        id: CallId(block.callId ?? ''),
+        id: ToolCallId(block.callId ?? ''),
         name: block.name ?? '',
         arguments: block.text,
       }
@@ -197,7 +197,7 @@ export async function* translate(payloads: AsyncIterable<string>): AsyncGenerato
         yield {
           type: 'tool-call-delta',
           index: block.index,
-          id: CallId(block.callId ?? ''),
+          id: ToolCallId(block.callId ?? ''),
           ...block.name !== undefined ? { name: block.name } : {},
           argumentsDelta: fragment,
         }

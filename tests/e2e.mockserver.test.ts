@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net'
 import { afterAll, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import {
-  CallId,
+  ToolCallId,
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
@@ -431,14 +431,14 @@ describe('QwenLocalAdapter e2e (mock vLLM)', () => {
     const assistantMessage = createAssistantMessage({
       content: [{
         type: 'tool-call',
-        id: CallId('call-1'),
+        id: ToolCallId('call-1'),
         name: 'bash',
         arguments: '{"command":"ls"}',
       }],
       source: { provider: 'qwen-local', model: 'qwen3.8' },
     })
     const result = createToolResultMessage({
-      callId: CallId('call-1'),
+      callId: ToolCallId('call-1'),
       content: [{ type: 'text', text: 'file.txt' }],
       isError: false,
     })
@@ -473,14 +473,14 @@ describe('QwenLocalAdapter e2e (mock vLLM)', () => {
     const assistantMessage = createAssistantMessage({
       content: [{
         type: 'tool-call',
-        id: CallId('call-1'),
+        id: ToolCallId('call-1'),
         name: 'render_chart',
         arguments: '{"title":"sales"}',
       }],
       source: { provider: 'qwen-local', model: 'qwen3.8' },
     })
     const result = createToolResultMessage({
-      callId: CallId('call-1'),
+      callId: ToolCallId('call-1'),
       content: [
         { type: 'text', text: 'rendered at 800x600' },
         {

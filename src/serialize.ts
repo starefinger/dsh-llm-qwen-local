@@ -51,7 +51,7 @@
  * @module dsh-llm-qwen-local/serialize
  */
 
-import { contentHasImage, LlmError, offloadRequestImagesWithPolicy } from '@deepseek-ai/dsh-llm'
+import { contentHasImage, LlmError, offloadRequestImagesWithPolicy, offloadedImageText } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import { AttachmentError } from '@deepseek-ai/dsh-attachment'
 import type {
@@ -450,6 +450,7 @@ export async function serializeRequest(
       representation: 'base64',
       maxBytes: maxRequestImageBytes,
       byteQuantum: 1,
+      placeholder: (ref) => offloadedImageText(ref),
     })
   messages.push(...await serializeMessages(history, model, attachments, options.signal))
 

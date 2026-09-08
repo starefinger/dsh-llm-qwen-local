@@ -36,11 +36,13 @@ export interface QwenLocalDiscoveryFacts {
  * Interrogate one endpoint's model list.
  * @param request - the draft a configuration surface is still editing.
  * @param facts - catalog and credential access owned by the plugin.
+ * @param signal - operation-local cancellation the harness passes to the discovery callback (0.1.2 passes it separately from the request).
  * @throws LlmError `INVALID_REQUEST` (with `status`) on a rejected probe, `TRANSPORT` on a failed connection, `ABORTED` on caller cancellation.
  */
 export async function discoverQwenModels(
   request: LlmModelDiscoveryRequest,
   facts: QwenLocalDiscoveryFacts,
+  signal?: AbortSignal,
 ): Promise<readonly LlmDiscoveredModel[]> {
   if (request.baseURL === undefined || request.baseURL.trim().length === 0) {
     if (request.provider === undefined) {
@@ -61,10 +63,10 @@ export async function discoverQwenModels(
         ...attributionHeaders(),
         ...(apiKey === undefined ? {} : { authorization: `Bearer ${apiKey}` }),
       },
-      ...request.signal === undefined ? {} : { signal: request.signal },
+      ...signal === undefined ? {} : { signal },
     })
   } catch (error: unknown) {
-    if (request.signal !== undefined && request.signal.aborted) {
+    if (signal !== undefined && signal.aborted) {
       throw new LlmError('qwen-local model discovery aborted', 'ABORTED', { cause: error })
     }
     throw new LlmError(`qwen-local model list request to ${url} failed`, 'TRANSPORT', { cause: error })

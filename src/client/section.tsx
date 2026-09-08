@@ -18,7 +18,8 @@
  * the page carries its own minimal rules.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { IApiClient, SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
+import type { LlmModelDiscoveryRequest } from '@deepseek-ai/dsh-api-remotes/client'
+import type { QwenLocalOperations } from './operations.ts'
 import type { LocaleKey } from './locales.ts'
 
 /** The settings namespace this page edits (mirrors the node-side NS). */
@@ -39,11 +40,6 @@ export const KEY_REF = 'QWEN_LOCAL_API_KEY'
 /** The core `refFor` convention: a named ref in the section wins, else the derived default. */
 function refFor(loadedRef: string): string {
   return loadedRef.length > 0 ? loadedRef : KEY_REF
-}
-
-/** The pushed-invalidation channel the page listens on (structural subset). */
-export interface RemoteEvents {
-  $on(event: string, handler: (...args: unknown[]) => void): () => void
 }
 
 /** One effort row in flight. `wire` is the raw input text: '' means null. */
@@ -240,22 +236,23 @@ function wireSection(state: PageState, keyMode: KeyMode): Record<string, unknown
 export interface QwenLocalSectionProps {
   /** Close the settings panel (the shell owns the open state). */
   close: () => void
-  /** The shared API client (settings + llm domains). */
-  api: IApiClient
-  /** The pushed-invalidation channel (settings/credentials/topology events). */
+  /** The bound Host operations (settings/credentials/llm remote namespaces). */
+  operations: QwenLocalOperations
+  /** The settings namespace this page edits. */
+  sectionNs: string
+  /** The pushed-invalidation channel (settings/credentials document commits). */
   remote: RemoteEvents
   /** Registrant-localized translate. */
   t: T
 }
 
-/** Unwrap one RPC response or throw a readable error. */
-function unwrap<T>(response: { result: { ok: true; value: T } | { ok: false; error: { message: string } } }): T {
-  if (!response.result.ok) throw new Error(response.result.error.message)
-  return response.result.value
+/** The pushed-invalidation channel the page listens on (structural subset). */
+export interface RemoteEvents {
+  $on(event: string, handler: (...args: unknown[]) => void): () => void
 }
 
 /** The Qwen (local) settings page body. */
-export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX.Element {
+export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocalSectionProps): JSX.Element {
   const [page, setPage] = useState<PageState | undefined>()
   const [loadError, setLoadError] = useState<string | undefined>()
   const [missing, setMissing] = useState(false)
@@ -275,23 +272,28 @@ export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX
     setLoadError(undefined)
     setMissing(false)
     try {
-      const described = unwrap(await api.settings.describe({}))
-      const view: SettingsNamespaceView | undefined = described.namespaces.find(entry => entry.ns === SECTION_NS)
-      if (view === undefined) {
+      const described = await operations.describeSection(sectionNs)
+      if (described.kind === 'refused') {
+        setLoadError(described.message)
+        setPage(undefined)
+        return
+      }
+      if (described.kind === 'missing') {
         setMissing(true)
         setPage(undefined)
         return
       }
+      const view = described.view
       const parsed = parsePage(view.value, view.revision)
       setPage(parsed)
       const ref = refFor(parsed.apiKeyEnv)
-      const creds = unwrap(await api.credentials.describe({ refs: [ref] }))
-      setKeyStored(creds.credentials[ref] !== undefined)
+      const info = await operations.describeCredential(ref)
+      setKeyStored(info !== undefined && info.configured)
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error))
       setPage(undefined)
     }
-  }, [api])
+  }, [operations, sectionNs])
 
   useEffect(() => {
     void load()
@@ -300,8 +302,13 @@ export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX
   // Pushed invalidation: any committed settings change refetches the section
   // so two open surfaces converge without polling.
   useEffect(() => {
-    const dispose = remote.$on('settings/document-updated', () => { void load() })
-    return () => { dispose() }
+    const disposers = [
+      remote.$on('settings/document-updated', () => { void load() }),
+      remote.$on('credentials/reference-updated', () => { void load() }),
+    ]
+    return () => {
+      for (const dispose of disposers) dispose()
+    }
   }, [remote, load])
 
   const setModel = useCallback((index: number, patch: Partial<ModelDraft>) => {
@@ -338,12 +345,15 @@ export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX
     setDiscoverError(undefined)
     setDiscoverNote(undefined)
     try {
-      const request: Record<string, unknown> = {
-        settingsNs: SECTION_NS,
+      const request: LlmModelDiscoveryRequest = {
         provider: PROVIDER_ROUTE,
       }
       if (page.baseURL.length > 0) request.baseURL = page.baseURL
-      const result = unwrap(await api.llm.discoverModels(request as never))
+      const result = await operations.discoverModels(sectionNs, request)
+      if (result.kind === 'refused') {
+        setDiscoverError(t('discoverError', { detail: result.message }))
+        return
+      }
       const found = result.models
       if (found.length === 0) {
         setDiscoverNote(t('discoverEmpty'))
@@ -382,7 +392,7 @@ export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX
     } finally {
       setDiscovering(false)
     }
-  }, [api, page, t])
+  }, [operations, sectionNs, page, t])
 
   const keyMode: KeyMode = keyClear ? 'clear' : keyDraft.length > 0 ? 'new' : 'keep'
 
@@ -398,18 +408,21 @@ export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX
       // never the reverse (a section pointing at a missing credential).
       const ref = refFor(page.apiKeyEnv)
       if (keyClear) {
-        unwrap(await api.credentials.unset({ ref }))
+        const removed = await operations.removeCredential(ref)
+        if (removed.kind === 'refused') throw new Error(removed.message)
         setKeyStored(false)
       } else if (keyDraft.length > 0) {
-        unwrap(await api.credentials.set({ ref, value: keyDraft }))
+        const stored = await operations.storeCredential(ref, keyDraft)
+        if (stored.kind === 'refused') throw new Error(stored.message)
         setKeyStored(true)
       }
-      const view = unwrap(await api.settings.replace({
-        ns: SECTION_NS,
-        section: wireSection(page, keyMode),
-        expectedRevision: page.revision,
-      }))
-      setPage(parsePage(view.value, view.revision))
+      const written = await operations.replaceSection(sectionNs, wireSection(page, keyMode), page.revision)
+      if (written.kind === 'conflict') {
+        setSaveError(t('saveError', { detail: written.message }))
+        return
+      }
+      if (written.kind === 'refused') throw new Error(written.message)
+      setPage(parsePage(written.view.value, written.view.revision))
       setKeyDraft('')
       setKeyClear(false)
       setSaved(true)
@@ -418,7 +431,7 @@ export function QwenLocalSection({ api, remote, t }: QwenLocalSectionProps): JSX
     } finally {
       setSaving(false)
     }
-  }, [api, page, t, keyDraft, keyMode])
+  }, [operations, sectionNs, page, t, keyDraft, keyMode])
 
   // The ref the key operations target: the section's named one, else the
   // derived default (the core `refFor` convention).

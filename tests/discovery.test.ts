@@ -194,7 +194,7 @@ describe('discoverQwenModels', () => {
     }))
     let code = ''
     try {
-      await discoverQwenModels({ baseURL: mock.url, signal: controller.signal }, facts())
+      await discoverQwenModels({ baseURL: mock.url }, facts(), controller.signal)
     } catch (error) {
       code = error instanceof LlmError ? error.failure.code : 'NOT_LLM_ERROR'
     }

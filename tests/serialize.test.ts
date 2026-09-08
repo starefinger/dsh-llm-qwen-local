@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
-  CallId,
+  ToolCallId,
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
   LlmError,
-  OFFLOADED_IMAGE_TEXT,
+  offloadedImageText,
   ReasoningEffortId,
 } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
@@ -134,7 +134,7 @@ describe('serializeRequest: messages', () => {
     const assistant = createAssistantMessage({
       content: [{
         type: 'tool-call',
-        id: CallId('call-1'),
+        id: ToolCallId('call-1'),
         name: 'bash',
         arguments: '{"command":"ls"}',
       }],
@@ -174,7 +174,7 @@ describe('serializeRequest: messages', () => {
         { type: 'reasoning', text: 'plan the command' },
         {
           type: 'tool-call',
-          id: CallId('call-1'),
+          id: ToolCallId('call-1'),
           name: 'bash',
           arguments: '{"command":"ls"}',
         },
@@ -213,12 +213,12 @@ describe('serializeRequest: messages', () => {
 
   it('expands tool results into role:tool messages with placeholder for empty output', async () => {
     const filled = createToolResultMessage({
-      callId: CallId('call-1'),
+      callId: ToolCallId('call-1'),
       content: [{ type: 'text', text: 'ok' }],
       isError: false,
     })
     const empty = createToolResultMessage({
-      callId: CallId('call-2'),
+      callId: ToolCallId('call-2'),
       content: [],
       isError: true,
     })
@@ -231,7 +231,7 @@ describe('serializeRequest: messages', () => {
 
   it('refuses an image inside a tool result for a text-only model (direct-adapter defense)', async () => {
     const result = createToolResultMessage({
-      callId: CallId('call-1'),
+      callId: ToolCallId('call-1'),
       content: [{
         type: 'image',
         attachment: {
@@ -255,7 +255,7 @@ describe('serializeRequest: messages', () => {
 
   it('splits an image-only tool result into a text tool message plus a follow-up user image message', async () => {
     const result = createToolResultMessage({
-      callId: CallId('call-1'),
+      callId: ToolCallId('call-1'),
       content: [{
         type: 'image',
         attachment: {
@@ -290,7 +290,7 @@ describe('serializeRequest: messages', () => {
 
   it('keeps the tool result text and splits the images out for a multimodal model', async () => {
     const result = createToolResultMessage({
-      callId: CallId('call-1'),
+      callId: ToolCallId('call-1'),
       content: [
         { type: 'text', text: 'rendered at 800x600' },
         {
@@ -325,7 +325,7 @@ describe('serializeRequest: messages', () => {
 
   it('refuses a tool-result image when the attachment service is absent, even for a multimodal model', async () => {
     const result = createToolResultMessage({
-      callId: CallId('call-1'),
+      callId: ToolCallId('call-1'),
       content: [{
         type: 'image',
         attachment: {
@@ -694,8 +694,15 @@ describe('serializeRequest: request-image pipeline (0.1.1-rc.2)', () => {
     // The oldest message's image became the offload placeholder text, so the
     // message serializes as a plain text user message; the newest message
     // keeps its image (text + one image_url part).
+    const placeholder = offloadedImageText({
+      attachmentId: AttachmentId('att-old'),
+      mediaType: 'image/png',
+      bytes: 3,
+      width: 1,
+      height: 1,
+    })
     expect(body.messages).toEqual([
-      { role: 'user', content: `what is in this image?${OFFLOADED_IMAGE_TEXT}` },
+      { role: 'user', content: `what is in this image?${placeholder}` },
       { role: 'user', content: [
         { type: 'text', text: 'what is in this image?' },
         { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } },

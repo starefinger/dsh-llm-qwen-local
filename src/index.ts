@@ -8,9 +8,10 @@
  * need attachments; local vLLM often uses no auth at all).
  *
  * Frontend configuration: the plugin's `Config` schema is installed as the
- * `llm-qwen-local` user-settings section (via
- * {@link installSettingsSection}), so the web settings surface renders an
- * editable form for it; commits switch the configuration source live. The
+ * `llm-qwen-local` user-settings section through the settings service's
+ * `installSection` seam (attached only while a settings service is mounted),
+ * so the web settings surface renders an editable form for it; commits switch
+ * the configuration source live. The
  * provider is registered in the configurable-provider directory (the web
  * Models page offers it as a row, live or dormant) and a model-discovery
  * hook interrogates a draft's `GET /models` endpoint so the Models page can
@@ -41,7 +42,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'
 import type { LlmDiscoveredModel } from '@deepseek-ai/dsh-llm'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type {} from '@deepseek-ai/dsh-settings'
 import { QwenLocalAdapter } from './adapter.js'
 import { Config, resolveConfig } from './config.js'
 import type { QwenLocalOptions } from './config.js'
@@ -92,7 +93,7 @@ export const inject = ['llm']
 export const PROVIDER = 'qwen-local'
 
 /** The user-settings namespace that configures this provider. */
-export const NS = settingsNamespace('llm-qwen-local')
+export const NS = 'llm-qwen-local'
 
 // The `Config` value (the schemastery schema) and the `Config` type are both
 // re-exported above from './config.js': Cordis validates the `cordis.yml`
@@ -150,7 +151,7 @@ export function apply(ctx: Context, config: Config): void {
   // answered from the adapter's own catalog; a named route supplies its
   // stored credential when the draft carries none (a miss probes
   // unauthenticated — most local vLLM instances use no auth).
-  ctx.llm.registerModelDiscovery(NS, request => discoverQwenModels(request, {
+  ctx.llm.registerModelDiscovery(NS, (request, signal) => discoverQwenModels(request, {
     ownModels: (): readonly LlmDiscoveredModel[] => options().models.map(model => ({
       id: model.id,
       name: model.name ?? model.id,
@@ -167,26 +168,29 @@ export function apply(ctx: Context, config: Config): void {
         return undefined
       }
     },
-  }))
-  // Install the canonical optional-settings consumer wiring: the section
-  // schema resolves the whole profile, a write that could not be served is
-  // refused where it is written (validate), and a committed change switches
-  // the source before the adapter's next per-request resolution.
-  installSettingsSection(ctx, NS, Config, config, {
-    validate: (value) => {
-      resolveConfig(value)
-    },
-    setSource: (source) => {
-      current = source
-    },
-    // The adapter re-resolves options() per stream, and the catalog plus the
-    // discovery hook read the same source, so no re-registration is needed —
-    // the fixed route set never changes, only the facts behind it.
-    onChange: () => {
-      // Re-validate through the new source now: an unserviceable section
-      // cannot hide behind a lazy per-request resolution.
-      options()
-    },
+  }, signal))
+  // Optional-settings consumer wiring: the section schema resolves the whole
+  // profile, a write that could not be served is refused where it is written
+  // (validate), and a committed change switches the source before the
+  // adapter's next per-request resolution. The settings service is optional,
+  // so the consumer attaches only while one is mounted (0.1.2 seam).
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.settings.installSection(ctx, NS, Config, config, {
+      validate: (value) => {
+        resolveConfig(value)
+      },
+      setSource: (source) => {
+        current = source
+      },
+      // The adapter re-resolves options() per stream, and the catalog plus the
+      // discovery hook read the same source, so no re-registration is needed —
+      // the fixed route set never changes, only the facts behind it.
+      onChange: () => {
+        // Re-validate through the new source now: an unserviceable section
+        // cannot hide behind a lazy per-request resolution.
+        options()
+      },
+    })
   })
   ctx.llm.registerAdapter([PROVIDER], adapter)
 }
