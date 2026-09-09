@@ -6,7 +6,7 @@ English | [简体中文](README.zh.md)
 
 DeepSeek Harness LLM adapter plugin for a **locally deployed Qwen model** (e.g. Qwen3.8-27B) served by **vLLM** behind its OpenAI-compatible `/v1/chat/completions` endpoint.
 
-> **v0.3.1** · exact compatibility target: DSH `0.1.1-rc.2` · MIT · community-maintained and not a DeepSeek or Qwen product.
+> **v0.3.2** · exact compatibility target: DSH `0.1.2-rc.1` · MIT · community-maintained and not a DeepSeek or Qwen product.
 
 ```sh
 dsh plugin --profile web add dsh-llm-qwen-local
@@ -45,7 +45,7 @@ Two deployment-specific knobs are first-class:
 
 ## Requirements
 
-- An installed `dsh` (the CLI) **0.1.1-rc.2 or newer**, and a vLLM instance serving your Qwen model with the OpenAI-compatible API.
+- An installed `dsh` (the CLI) **0.1.2-rc.1 or newer**, and a vLLM instance serving your Qwen model with the OpenAI-compatible API.
 - Node.js with global `fetch` (18+).
 - A profile whose composition mounts `@deepseek-ai/dsh-attachment` — the standard `web` and `headless` profiles do, via `dsh-base`.
 
@@ -64,7 +64,7 @@ dsh plugin --profile web add github:starefinger/dsh-llm-qwen-local
 dsh plugin --profile web add ./path/to/qwen3.8-LLM-plugin
 
 # or from a packed tarball (prebuilt — no build step on install):
-dsh plugin --profile web add ./dsh-llm-qwen-local-0.3.1.tgz
+dsh plugin --profile web add ./dsh-llm-qwen-local-0.3.2.tgz
 
 # verify the contributed layer, then start:
 dsh --profile web --dump-config
@@ -76,8 +76,8 @@ dsh --profile web
 Each compatibility snapshot is tagged with the dsh version it targets. Snapshots published since 0.3.1 use `dsh-<dsh-version>-plugin-<plugin-version>` (dsh version first, plugin version as suffix); earlier snapshots use the bare `dsh-<dsh-version>` form. **For a given dsh version, several tags may exist — use the one with the newest plugin-version suffix: it is the latest snapshot that supports your dsh.** To install a specific snapshot, append `#<tag>` to the git URL — pnpm resolves the tag to the exact commit, so the install is reproducible and independent of `main`'s current state:
 
 ```sh
-# install the latest snapshot for dsh 0.1.1-rc.2 (plugin 0.3.1):
-dsh plugin --profile web add "git+https://github.com/starefinger/dsh-llm-qwen-local.git#dsh-0.1.1-rc.2-plugin-0.3.1"
+# install the latest snapshot for dsh 0.1.2-rc.1 (plugin 0.3.2):
+dsh plugin --profile web add "git+https://github.com/starefinger/dsh-llm-qwen-local.git#dsh-0.1.2-rc.1-plugin-0.3.2"
 ```
 
 Pick the tag matching your dsh version (`dsh --version`) — when several tags share the same dsh version, take the newest plugin-version suffix. After upgrading dsh, remove and re-add with the tag for the new version:
