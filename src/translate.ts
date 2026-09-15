@@ -10,7 +10,8 @@
  * @module dsh-llm-qwen-local/translate
  */
 
-import { EMPTY_RESPONSE_CODE, LlmError, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { EMPTY_RESPONSE_CODE, LlmError } from './harness/llm-error.js'
+import { ToolCallId } from './harness/brand.js'
 import type { ContentBlock, FinishReason, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { DONE } from './sse.js'
 import type { WireChunk, WireUsage } from './wire.js'

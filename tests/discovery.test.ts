@@ -4,7 +4,9 @@
 import { createServer, type IncomingHttpHeaders, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, describe, expect, it } from 'vitest'
-import { LlmError } from '@deepseek-ai/dsh-llm'
+// Re-pointed to the local LlmError: src now throws the local class, so the
+// `instanceof` check (below) must test against the same class identity.
+import { LlmError } from '../src/harness/llm-error.js'
 import type { LlmDiscoveredModel, LlmModelDiscoveryRequest } from '@deepseek-ai/dsh-llm'
 import { discoverQwenModels } from '../src/discovery.js'
 

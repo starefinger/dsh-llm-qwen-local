@@ -39,8 +39,9 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
-import { assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'
+import { launchEnvironmentOf } from './harness/launch-environment.js'
+import { assertUsableApiKey } from './harness/api-key.js'
+import { LlmError } from './harness/llm-error.js'
 import type { LlmDiscoveredModel } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-settings'
 import { QwenLocalAdapter } from './adapter.js'

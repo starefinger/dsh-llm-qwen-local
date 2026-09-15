@@ -6,14 +6,17 @@ import { createServer, type IncomingHttpHeaders, type Server, type ServerRespons
 import type { AddressInfo } from 'node:net'
 import { afterAll, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+// Re-pointed to local modules: the adapter (src) now throws the local
+// LlmError, so the `instanceof`/`toBeInstanceOf` assertions below must check
+// the same class identity. LlmRuntime and the message-creator helpers stay
+// from the devDependency (tests are not a published artifact).
+import { ToolCallId, ReasoningEffortId } from '../src/harness/brand.js'
+import { LlmError } from '../src/harness/llm-error.js'
 import {
-  ToolCallId,
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
-  LlmError,
   LlmRuntime,
-  ReasoningEffortId,
 } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'

@@ -1,7 +1,8 @@
 /**
- * Plugin config for the local Qwen adapter: one schemastery schema (validated
- * at plugin load) plus one explicit resolve step that re-judges every bound,
- * so programmatic construction cannot bypass the schema silently.
+ * Plugin config for the local Qwen adapter: one frozen configuration surface
+ * (validated at plugin load) plus one explicit resolve step that re-judges
+ * every bound, so programmatic construction cannot bypass the schema
+ * silently.
  *
  * Design points:
  * - `multimodal` is a per-model CLAIM about the endpoint (declaration, not a
@@ -18,7 +19,12 @@
  * @module dsh-llm-qwen-local/config
  */
 
-import z from '@deepseek-ai/schemastery'
+// Type-only: the `z<T>` annotation below declares Config's public type as the
+// schemastery schema shape so the settings service's `installSection` accepts
+// it unchanged. `import type` is erased at build time (isolatedModules), so
+// the published plugin never loads @deepseek-ai/schemastery — the runtime
+// stand-in is the hand-owned callable + frozen envelope below.
+import type z from '@deepseek-ai/schemastery'
 
 /** Default endpoint for a local vLLM instance. */
 export const DEFAULT_BASE_URL = 'http://127.0.0.1:8000/v1'
@@ -79,7 +85,7 @@ export interface QwenLocalReasoning {
    * `chat_template_kwargs: { enable_thinking: false }` for the vLLM Qwen
    * chat template; `omit` sends nothing extra.
    */
-  offMode: 'chat-template-kwargs' | 'omit'
+  offMode?: 'chat-template-kwargs' | 'omit'
 }
 
 /** One configured model of the local deployment. */
@@ -158,41 +164,311 @@ export interface Config {
   maxRequestImageBytes?: number
 }
 
-const reasoningEffortSchema: z<QwenLocalReasoningEffort> = z.object({
-  id: z.string().required(),
-  name: z.string(),
-  wire: z.union([z.string(), z.const(null)]).required(),
-})
+// ── Frozen schemastery envelope for the llm-qwen-local namespace ─────────
+// The EXACT uid/refs serialization the schemastery Config schema produced
+// (captured once from Config.toJSON()), frozen as a plain object so the
+// published plugin carries no runtime dependency on
+// @deepseek-ai/schemastery. The settings service exposes it to the web form
+// renderer via schema.toJSON(); the Cordis loader validates the composition
+// entry via the ~standard surface below. Keep in sync if the Config shape
+// changes (regenerate with scripts/extract-envelope.mjs).
+const ENVELOPE = {
+  uid: 60,
+  refs: {
+    "1": {
+      type: "string",
+      meta: {
+        required: true
+      }
+    },
+    "2": {
+      type: "string",
+      meta: {
 
-const reasoningSchema: z<QwenLocalReasoning> = z.object({
-  efforts: z.array(reasoningEffortSchema).min(1).required(),
-  defaultEffort: z.string(),
-  offMode: z.union(['chat-template-kwargs', 'omit']).default('chat-template-kwargs'),
-})
+      }
+    },
+    "3": {
+      type: "string",
+      meta: {
 
-const modelSchema: z<QwenLocalModel> = z.object({
-  id: z.string().required(),
-  name: z.string(),
-  description: z.string(),
-  contextWindow: z.number().step(1).min(1),
-  maxTokens: z.number().step(1).min(1),
-  multimodal: z.boolean().default(false),
-  preserveThinking: z.boolean().default(true),
-  imageMaxPixels: z.number().step(1).min(1),
-  imageMaxBytes: z.number().step(1).min(1),
-  reasoning: reasoningSchema,
-})
+      }
+    },
+    "4": {
+      type: "const",
+      meta: {
 
-export const Config: z<Config> = z.object({
-  baseURL: z.string().default(DEFAULT_BASE_URL),
-  apiKeyEnv: z.string(),
-  models: z.array(modelSchema).min(1).required(),
-  defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
-  maxTokens: z.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
-  streamIdleTimeoutMs: z.number().min(1).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
-  maxRequestImageBytes: z.number().step(1).min(1),
-})
+      },
+      value: null
+    },
+    "6": {
+      type: "union",
+      meta: {
+        required: true
+      },
+      list: [
+        3,
+        4
+      ]
+    },
+    "7": {
+      type: "object",
+      meta: {
+        default: {
 
+        }
+      },
+      dict: {
+        id: 1,
+        name: 2,
+        wire: 6
+      }
+    },
+    "10": {
+      type: "array",
+      meta: {
+        default: [],
+        min: 1,
+        required: true
+      },
+      inner: 7
+    },
+    "11": {
+      type: "string",
+      meta: {
+
+      }
+    },
+    "14": {
+      type: "const",
+      meta: {
+        required: true
+      },
+      value: "chat-template-kwargs"
+    },
+    "16": {
+      type: "const",
+      meta: {
+        required: true
+      },
+      value: "omit"
+    },
+    "17": {
+      type: "union",
+      meta: {
+        default: "chat-template-kwargs"
+      },
+      list: [
+        14,
+        16
+      ]
+    },
+    "18": {
+      type: "object",
+      meta: {
+        default: {
+
+        }
+      },
+      dict: {
+        efforts: 10,
+        defaultEffort: 11,
+        offMode: 17
+      }
+    },
+    "20": {
+      type: "string",
+      meta: {
+        required: true
+      }
+    },
+    "21": {
+      type: "string",
+      meta: {
+
+      }
+    },
+    "22": {
+      type: "string",
+      meta: {
+
+      }
+    },
+    "25": {
+      type: "number",
+      meta: {
+        step: 1,
+        min: 1
+      }
+    },
+    "28": {
+      type: "number",
+      meta: {
+        step: 1,
+        min: 1
+      }
+    },
+    "30": {
+      type: "boolean",
+      meta: {
+        default: false
+      }
+    },
+    "32": {
+      type: "boolean",
+      meta: {
+        default: true
+      }
+    },
+    "35": {
+      type: "number",
+      meta: {
+        step: 1,
+        min: 1
+      }
+    },
+    "38": {
+      type: "number",
+      meta: {
+        step: 1,
+        min: 1
+      }
+    },
+    "39": {
+      type: "object",
+      meta: {
+        default: {
+
+        }
+      },
+      dict: {
+        id: 20,
+        name: 21,
+        description: 22,
+        contextWindow: 25,
+        maxTokens: 28,
+        multimodal: 30,
+        preserveThinking: 32,
+        imageMaxPixels: 35,
+        imageMaxBytes: 38,
+        reasoning: 18
+      }
+    },
+    "41": {
+      type: "string",
+      meta: {
+        default: "http://127.0.0.1:8000/v1"
+      }
+    },
+    "42": {
+      type: "string",
+      meta: {
+
+      }
+    },
+    "45": {
+      type: "array",
+      meta: {
+        default: [],
+        min: 1,
+        required: true
+      },
+      inner: 39
+    },
+    "49": {
+      type: "number",
+      meta: {
+        step: 1,
+        min: 1,
+        default: 262144
+      }
+    },
+    "53": {
+      type: "number",
+      meta: {
+        step: 1,
+        min: 1,
+        default: 32768
+      }
+    },
+    "56": {
+      type: "number",
+      meta: {
+        min: 1,
+        default: 300000
+      }
+    },
+    "59": {
+      type: "number",
+      meta: {
+        step: 1,
+        min: 1
+      }
+    },
+    "60": {
+      type: "object",
+      meta: {
+        default: {
+
+        }
+      },
+      dict: {
+        baseURL: 41,
+        apiKeyEnv: 42,
+        models: 45,
+        defaultContextWindow: 49,
+        maxTokens: 53,
+        streamIdleTimeoutMs: 56,
+        maxRequestImageBytes: 59
+      }
+    }
+  }
+}
+
+/**
+ * Standard-schema v1 surface the Cordis loader applies to the composition
+ * config entry at plugin load (Cordis resolveConfig calls
+ * Config["~standard"].validate). It funnels through resolveConfig — the
+ * same explicit resolve step the settings service uses — so the load-time
+ * and runtime judgments can never diverge.
+ */
+const CONFIG_STANDARD = {
+  version: 1 as const,
+  vendor: 'dsh-llm-qwen-local' as const,
+  validate(input: unknown):
+    | { value: QwenLocalOptions; issues?: undefined }
+    | { value?: undefined; issues: readonly { message: string }[] } {
+    try {
+      return { value: resolveConfig((input ?? {}) as Config) }
+    } catch (error) {
+      return { issues: [{ message: error instanceof Error ? error.message : String(error) }] }
+    }
+  },
+}
+
+/**
+ * The configuration surface the plugin exposes to its two consumers: the
+ * settings service (invokes it as `schema(mergedValue)` and reads
+ * `schema.toJSON()`) and the Cordis loader (reads
+ * `Config["~standard"].validate`). The callable IS the explicit resolve step,
+ * and `toJSON()` answers the frozen envelope for the web form renderer.
+ *
+ * Owning the callable and the envelope as hand-written facts (instead of a
+ * live schemastery instance) is what lets the published plugin drop the
+ * schemastery dependency entirely. The public type is still the schemastery
+ * schema shape (`z<Config>`) so the settings service's `installSection`
+ * accepts it unchanged and the exported surface is byte-compatible with the
+ * original; the runtime stand-in is cast to that type because the only
+ * members the harness actually touches — the call signature, `toJSON()`, and
+ * `["~standard"]` — are all implemented here, and no harness code path
+ * reaches the remaining schemastery-only members.
+ */
+export const Config: z<Config> = Object.assign(
+  (config: Config): QwenLocalOptions => resolveConfig(config),
+  {
+    toJSON: () => ENVELOPE,
+    '~standard': CONFIG_STANDARD,
+  },
+) as unknown as z<Config>
 /**
  * Validated, detached request facts for the adapter. The adapter trusts this
  * value; re-resolution happens per request so a configuration change reaches
@@ -248,10 +524,21 @@ function resolveReasoning(raw: QwenLocalReasoning, modelId: string): QwenLocalRe
       `${PKG}: model "${modelId}" defaultEffort "${raw.defaultEffort}" is not among its declared efforts`,
     )
   }
+  // `offMode` keeps its schemastery default here: the schema's
+  // `z.union([...]).default('chat-template-kwargs')` used to fill it before
+  // this step ran, so re-applying it is what keeps the resolved output
+  // identical now that resolveConfig IS the load-time validator. An out-of-
+  // vocabulary value is refused like the schema's union did.
+  const offMode = raw.offMode ?? 'chat-template-kwargs'
+  if (offMode !== 'chat-template-kwargs' && offMode !== 'omit') {
+    throw new Error(
+      `${PKG}: model "${modelId}" offMode must be "chat-template-kwargs" or "omit"`,
+    )
+  }
   return {
     efforts,
     ...raw.defaultEffort === undefined ? {} : { defaultEffort: raw.defaultEffort },
-    offMode: raw.offMode,
+    offMode,
   }
 }
 

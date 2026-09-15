@@ -51,9 +51,13 @@
  * @module dsh-llm-qwen-local/serialize
  */
 
-import { contentHasImage, LlmError, offloadRequestImagesWithPolicy, offloadedImageText } from '@deepseek-ai/dsh-llm'
+import {
+  contentHasImage,
+  offloadRequestImagesWithPolicy,
+  offloadedImageText,
+} from './harness/content.js'
+import { LlmError } from './harness/llm-error.js'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
-import { AttachmentError } from '@deepseek-ai/dsh-attachment'
 import type {
   AttachmentStore,
   ImageAttachmentRef,
@@ -108,7 +112,16 @@ export async function resolveRequestImageBytes(
       const projected = await attachments.readImageRequest(ref, policy, signal)
       return { data: projected.data, mediaType: projected.mediaType }
     } catch (error: unknown) {
-      if (!(error instanceof AttachmentError) || error.code !== PROJECTION_UNSUPPORTED) throw error
+      // Duck-type the rejection by its `code` OWN property, not by class
+      // identity: the attachment store is mounted by the harness and throws
+      // the package's AttachmentError, whose own `code` property is the
+      // stable contract. A local class copy could never match it by
+      // `instanceof`, so the code check is the only portable test.
+      if (error === null
+        || typeof error !== 'object'
+        || (error as { code?: unknown }).code !== PROJECTION_UNSUPPORTED) {
+        throw error
+      }
     }
   }
   const stored = await attachments.readImage(ref, signal)

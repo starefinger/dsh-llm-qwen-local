@@ -14,7 +14,8 @@
  * @module dsh-llm-qwen-local/discovery
  */
 
-import { attributionHeaders, LlmError } from '@deepseek-ai/dsh-llm'
+import { attributionHeaders } from './harness/attribution.js'
+import { LlmError } from './harness/llm-error.js'
 import type { LlmDiscoveredModel, LlmModelDiscoveryRequest } from '@deepseek-ai/dsh-llm'
 import { httpErrorCode } from './adapter.js'
 

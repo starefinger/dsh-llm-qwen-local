@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { LlmError } from '@deepseek-ai/dsh-llm'
+// Re-pointed to the local LlmError: translate (src) throws the local class,
+// so the `as LlmError` assertions below read the same shape.
+import { LlmError } from '../src/harness/llm-error.js'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { translate } from '../src/translate.js'
 

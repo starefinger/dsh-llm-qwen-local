@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
+// Re-pointed to local modules: serialize (src) throws the local LlmError and
+// reads the local offloadedImageText, so assertions must check the same
+// classes/behaviors. The message-creator helpers stay from the devDependency
+// (tests are not a published artifact).
+import { ToolCallId, ReasoningEffortId } from '../src/harness/brand.js'
+import { LlmError } from '../src/harness/llm-error.js'
+import { offloadedImageText } from '../src/harness/content.js'
 import {
-  ToolCallId,
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
-  LlmError,
-  offloadedImageText,
-  ReasoningEffortId,
 } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import {

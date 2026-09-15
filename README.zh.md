@@ -153,8 +153,16 @@ pnpm test      # vitest: 序列化、翻译、对 mock vLLM 的 e2e
 
 测试针对脚本化的进程内 vLLM(SSE)mock 运行——不需要真实模型或端点。
 
+## 零运行时 harness 依赖
+
+发布的插件**不依赖任何 `@deepseek-ai` 运行时包**(无 `schemastery`、`dsh-llm`、`dsh-settings`、`dsh-attachment`、`dsh-launch-environment`、`cordis`)。唯一的运行时依赖是 MIT 许可的 `eventsource-parser` 与 Node.js 内建模块。插件用到的 DSH 接缝——`LlmAdapter` 契约、`LlmError` 失败快照、brand 标识函数、API key 校验、attribution 头、launch-environment 读取、内容/图片助手、以及 settings 命名空间的 `Config` 表面——都以 `src/harness/` 下的小型本地模块和 `src/config.ts` 中冻结的、手工拥有的配置表面复现,因此插件无需导入定义这些接缝的包,即可对宿主上的活服务加载。
+
+`@deepseek-ai` 各包保留为**开发期**依赖:它们固定类型层面的契约(`import type` 导入在构建中被擦除),并让测试套件能启动真实的 `LlmRuntime`。若宿主改变了某个接缝的运行时形状,需同步更新对应的本地模块——`tests/boot.test.ts` 回归用真实的 Cordis 加载期校验器驱动冻结的 `Config`,以捕获在插件加载时被校验的那个接缝上的漂移。
+
+`Config` 形状变更后重新生成冻结的 settings envelope:`node scripts/extract-envelope.mjs --check`(将冻结常量与 `scripts/envelope-source.ts` 中的参考 schema 对比;在重构前的树上运行普通模式以重新捕获)。
+
 ## 许可
 
 本仓库以 [MIT](LICENSE) 许可发布。
 
-插件运行时仅依赖 MIT 许可的包(`@deepseek-ai/schemastery`、`eventsource-parser`);开发工具链中包含 TypeScript(Apache-2.0)及其他 MIT 许可工具。本仓库未打包(vendor)任何 DeepSeek Harness 或 Qwen 源码。Qwen3.8-27B 模型权重与 DSH 产品各自受其上游条款约束;本插件为社区项目,非 DeepSeek 或 Qwen/阿里巴巴官方产品。
+插件的运行时依赖仅有 MIT 许可的(`eventsource-parser`,以及 Node.js 内建模块);不依赖任何 `@deepseek-ai` 运行时包。开发工具链中包含 TypeScript(Apache-2.0)及其他 MIT 许可工具,`@deepseek-ai` 各包作为仅开发期的类型固定保留可用。本仓库未打包(vendor)任何 DeepSeek Harness 或 Qwen 源码。Qwen3.8-27B 模型权重与 DSH 产品各自受其上游条款约束;本插件为社区项目,非 DeepSeek 或 Qwen/阿里巴巴官方产品。

@@ -15,20 +15,18 @@
  * @module dsh-llm-qwen-local/adapter
  */
 
-import {
-  assertUsableApiKey,
-  attributionHeaders,
-  LlmAdapter,
-  LlmError,
-  ProviderRequestId,
-  ReasoningEffortId,
-} from '@deepseek-ai/dsh-llm'
+import { LlmAdapter } from './harness/llm-adapter.js'
+import { LlmError } from './harness/llm-error.js'
+import { assertUsableApiKey } from './harness/api-key.js'
+import { attributionHeaders } from './harness/attribution.js'
+import { ProviderRequestId } from './harness/brand.js'
 import type {
   GenerateOptions,
   LlmModelInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
   PreparedAdapterCall,
+  ReasoningEffortId,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'

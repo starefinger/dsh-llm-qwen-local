@@ -153,8 +153,16 @@ pnpm test      # vitest: serialization, translation, e2e against a mock vLLM
 
 Tests run against a scripted in-process vLLM (SSE) mock — no real model or endpoint is required.
 
+## Zero runtime harness dependencies
+
+The published plugin carries **no runtime dependency on any `@deepseek-ai` package** (no `schemastery`, `dsh-llm`, `dsh-settings`, `dsh-attachment`, `dsh-launch-environment`, or `cordis`). Its only runtime dependencies are the MIT-licensed `eventsource-parser` and Node.js builtins. The DSH seams it touches — the `LlmAdapter` contract, the `LlmError` failure snapshot, brand identity functions, API-key validation, attribution headers, the launch-environment reader, the content/image helpers, and the settings-namespace `Config` surface — are reproduced as small local modules under `src/harness/` and a frozen, hand-owned configuration surface in `src/config.ts`, so the plugin loads against the host's live services without importing the packages that define them.
+
+The `@deepseek-ai` packages remain **dev** dependencies: they pin the type-level contract (the `import type` imports are erased from the build) and let the test suite boot a real `LlmRuntime`. If a host changes a seam's runtime shape, the local module must be updated to match — the `tests/boot.test.ts` regression drives the real Cordis load-time validator against the frozen `Config` to catch a drift in the one seam that is validated at plugin load.
+
+Regenerating the frozen settings envelope after a `Config` shape change: `node scripts/extract-envelope.mjs --check` (diffs the frozen constant against the reference schema in `scripts/envelope-source.ts`; run the plain mode on a pre-refactor tree to re-capture).
+
 ## License
 
 This repository is licensed under [MIT](LICENSE).
 
-The plugin depends only on MIT-licensed runtime packages (`@deepseek-ai/schemastery`, `eventsource-parser`); its development toolchain includes TypeScript (Apache-2.0) among other MIT-licensed tools. No DeepSeek Harness or Qwen source is vendored into this repository. The Qwen3.8-27B model weights and the DSH product remain subject to their own upstream terms; this plugin is a community project and is not an official DeepSeek or Qwen/Alibaba product.
+The plugin's only runtime dependencies are MIT-licensed (`eventsource-parser`, plus Node.js builtins); it has no runtime dependency on any `@deepseek-ai` package. Its development toolchain includes TypeScript (Apache-2.0) among other MIT-licensed tools, and the `@deepseek-ai` packages remain available as dev-only type pins. No DeepSeek Harness or Qwen source is vendored into this repository. The Qwen3.8-27B model weights and the DSH product remain subject to their own upstream terms; this plugin is a community project and is not an official DeepSeek or Qwen/Alibaba product.
