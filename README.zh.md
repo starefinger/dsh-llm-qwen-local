@@ -8,6 +8,16 @@
 
 > **v0.4.0** · 精确兼容目标:DSH `0.1.2-rc.1` · MIT · 社区维护,非 DeepSeek 或 Qwen 官方产品。
 
+> **✨ v0.4.0 新特性 —— 零运行时 `@deepseek-ai` 依赖**
+>
+> **发布的插件在运行时不再依赖任何 `@deepseek-ai` 包** —— 无 `schemastery`、`dsh-llm`、`dsh-settings`、`dsh-attachment`、`dsh-launch-environment`、`cordis`。唯一的运行时依赖是 MIT 许可的 `eventsource-parser` 与 Node.js 内建模块。
+>
+> **为什么:** 插件现在把用到的每一个 DSH 接缝(适配器契约、失败快照、brand 标识、API key / attribution / launch-env 助手、settings 命名空间的 `Config` 表面)都复刻为 `src/harness/` 下的小型本地模块,外加 `src/config.ts` 中冻结的、手工拥有的配置表面。插件无需导入定义这些接缝的包,即可对宿主上的活服务加载 —— 与参考实现 `dsh-llm-ollama` 相同的依赖姿态。
+>
+> **什么*不变*:** 对外插件行为完全一致 —— provider 路由 `qwen-local`、settings 命名空间 `llm-qwen-local`、设置页、模型发现、wire 方言均不变。DSH 兼容目标仍为 `0.1.2-rc.1`。`@deepseek-ai` 各包保留为**仅开发期**的类型固定(其 `import type` 引用在构建中被擦除),因此现有安装方式照旧可用。
+>
+> **升级:** 直接替换 —— `dsh plugin --profile web add dsh-llm-qwen-local@0.4.0`(或使用你的固定快照 tag)。无需任何配置变更。
+
 ```sh
 dsh plugin --profile web add dsh-llm-qwen-local
 ```

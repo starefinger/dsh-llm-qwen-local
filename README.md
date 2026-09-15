@@ -8,6 +8,16 @@ DeepSeek Harness LLM adapter plugin for a **locally deployed Qwen model** (e.g. 
 
 > **v0.4.0** · exact compatibility target: DSH `0.1.2-rc.1` · MIT · community-maintained and not a DeepSeek or Qwen product.
 
+> **✨ New in v0.4.0 — zero runtime `@deepseek-ai` dependencies**
+>
+> **The published plugin no longer depends on any `@deepseek-ai` package at runtime** — no `schemastery`, `dsh-llm`, `dsh-settings`, `dsh-attachment`, `dsh-launch-environment`, or `cordis`. Its only runtime dependencies are the MIT-licensed `eventsource-parser` and Node.js builtins.
+>
+> **Why:** the plugin now reproduces every DSH seam it touches (adapter contract, failure snapshots, brand ids, API-key/attribution/launch-env helpers, the settings-namespace `Config` surface) as small local modules under `src/harness/` plus a frozen, hand-owned configuration surface. It loads against the host's live services without importing the packages that define them — the same dependency posture as the `dsh-llm-ollama` reference implementation.
+>
+> **What does *not* change:** external plugin behavior is identical — provider route `qwen-local`, settings namespace `llm-qwen-local`, the settings page, model discovery, and the wire dialect. The DSH compatibility target stays `0.1.2-rc.1`. The `@deepseek-ai` packages remain **dev-only** type pins (their `import type` references are erased from the build), so existing installs keep working as-is.
+>
+> **Upgrading:** drop-in — just `dsh plugin --profile web add dsh-llm-qwen-local@0.4.0` (or your pinned snapshot tag). No configuration changes required.
+
 ```sh
 dsh plugin --profile web add dsh-llm-qwen-local
 ```
