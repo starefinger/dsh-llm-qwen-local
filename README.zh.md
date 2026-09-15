@@ -59,6 +59,28 @@ dsh plugin --profile web add dsh-llm-qwen-local
 - 带全局 `fetch` 的 Node.js(18+)。
 - 组合中挂载了 `@deepseek-ai/dsh-attachment` 的 profile——标准的 `web` 与 `headless` profile 都经由 `dsh-base` 挂载了它。
 
+### 支持的 DSH 版本
+
+| DSH 版本 | 状态 |
+|---|---|
+| **0.1.2-rc.1** 及更新 | ✅ **支持**——本插件构建与测试所针对的版本。 |
+| **0.1.1-rc.2** 及更早 | ⛔ **不支持**——web 应用**启动失败**(见下)。 |
+
+本插件的设置页通过 DSH **0.1.2 的 "remote-namespace" 客户端模型**(`ctx.remote.settings` / `ctx.remote.credentials` / `ctx.remote.llm`)与宿主通信。这些 typed 命名空间是**宿主提供的服务,仅在 DSH 0.1.2 及以上存在**——更早的版本(如 `0.1.1-rc.2`)提供的是旧的共享 `api`/`connection` 客户端,设置页找不到这些服务。
+
+在不受支持的 DSH 上安装本插件时,web 应用会在启动时中止,报错如下:
+
+```
+web boot: 1 entry did not activate
+dsh-llm-qwen-local: pending (waiting for services: remote.credentials, remote.llm, remote.settings)
+```
+
+这是 DSH < 0.1.2 上的预期表现——本插件与该版本不兼容。**解决办法:** 把 `dsh` 升级到 `0.1.2-rc.1` 或更新版本;或在旧版本上移除本插件:
+
+```sh
+dsh plugin --profile web remove dsh-llm-qwen-local
+```
+
 **必需的 vLLM 服务参数**(按官方 vLLM 配方):`--reasoning-parser qwen3` 实际上是强制的——没有它整个推理块会落进 `message.content`——工具调用还需 `--enable-auto-tool-choice --tool-call-parser qwen3_coder`,以及 `--max-model-len 262144`(或更高)。
 
 ## 安装

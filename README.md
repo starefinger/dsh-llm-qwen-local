@@ -59,6 +59,28 @@ Two deployment-specific knobs are first-class:
 - Node.js with global `fetch` (18+).
 - A profile whose composition mounts `@deepseek-ai/dsh-attachment` — the standard `web` and `headless` profiles do, via `dsh-base`.
 
+### Supported DSH versions
+
+| DSH version | Status |
+|---|---|
+| **0.1.2-rc.1** and newer | ✅ **Supported** — the version the plugin is built and tested against. |
+| **0.1.1-rc.2** and older | ⛔ **Not supported** — the web app **fails to boot** (see below). |
+
+The plugin's settings page talks to the host through DSH's **0.1.2 "remote-namespace" client model** (`ctx.remote.settings` / `ctx.remote.credentials` / `ctx.remote.llm`). Those typed namespaces are host-provided services that **only exist on DSH 0.1.2 and newer** — earlier releases (e.g. `0.1.1-rc.2`) expose the older shared `api`/`connection` client instead, so the page cannot find them.
+
+If you install the plugin on an unsupported DSH, the web app aborts at startup with:
+
+```
+web boot: 1 entry did not activate
+dsh-llm-qwen-local: pending (waiting for services: remote.credentials, remote.llm, remote.settings)
+```
+
+This is expected on DSH < 0.1.2 — the plugin is not compatible with that version. **Fix:** upgrade `dsh` to `0.1.2-rc.1` or newer, or remove the plugin on the older build:
+
+```sh
+dsh plugin --profile web remove dsh-llm-qwen-local
+```
+
 **Required vLLM serve flags** (per the official vLLM recipe): `--reasoning-parser qwen3` is effectively mandatory — without it the whole reasoning block lands in `message.content` — plus `--enable-auto-tool-choice --tool-call-parser qwen3_coder` for tool calling and `--max-model-len 262144` (or higher).
 
 ## Install
