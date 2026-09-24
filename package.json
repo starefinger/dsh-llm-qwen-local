@@ -1,7 +1,7 @@
 {
   "name": "dsh-llm-qwen-local",
   "description": "DeepSeek Harness LLM adapter plugin for locally deployed Qwen models behind a vLLM OpenAI-compatible endpoint: per-model multimodal switch, fully configurable reasoning efforts, and a web settings page (client plugin) for editing the deployment from the frontend",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "license": "MIT",
   "author": "starefinger",
   "repository": {

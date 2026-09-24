@@ -246,7 +246,7 @@ export class QwenLocalAdapter extends LlmAdapter {
     const attachments = this.config.resolveAttachments?.()
     let body
     try {
-      body = await serializeRequest(options, model, attachments, connection.maxRequestImageBytes)
+      body = await serializeRequest(options, model, attachments)
     } catch (error: unknown) {
       if (error instanceof LlmError) throw error
       throw new LlmError('qwen-local request serialization failed', 'PROTOCOL', { cause: error })

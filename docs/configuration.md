@@ -6,17 +6,18 @@ Every configuration field for `dsh-llm-qwen-local`. The configuration lives in t
 
 ## Route-level fields
 
-All fields except `models` are optional in `cordis.yml`; schema defaults fill the rest.
+All fields are optional in `cordis.yml`; schema defaults fill the rest.
 
 | Field | Default | Meaning |
 |---|---|---|
 | `baseURL` | `http://127.0.0.1:8000/v1` | Endpoint base; `/chat/completions` is appended. |
 | `apiKeyEnv` | — (no auth header) | Environment-variable name holding an optional bearer token, read per request. Absent/unset/blank = no `Authorization` header. |
-| `models` | **required** | At least one model entry. |
+| `models` | `[]` | Model entries. Empty (or absent) = the route stays mounted but dormant — no selectable models — and the settings page can re-populate it (discover or manual add). |
 | `defaultContextWindow` | `262144` | Context capacity used when a model has no exact value. |
 | `maxTokens` | `32768` | Per-request output cap fallback; explicit request values and a model's own cap win. |
 | `streamIdleTimeoutMs` | `300000` | Maximum provider idle time while one stream read is outstanding. |
-| `maxRequestImageBytes` | — (keep every image) | Total inlined base64 image payload bound per request; when exceeded, the **oldest** images are replaced with a deterministic text placeholder before serialization (the harness `offloadRequestImages` policy), so a history-heavy vision request still fits the endpoint's input cap. |
+
+**There is no route-level image cap.** Every image is inlined once it fits its per-image budget (`imageMaxPixels` / `imageMaxBytes`, default 640,000 px / 1 MiB); an oversized request is refused by the backend LLM service against its own input limits.
 
 ## Model entries
 

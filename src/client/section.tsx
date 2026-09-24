@@ -10,8 +10,16 @@
  * that ref name for the adapter's resolver. Model discovery probes the
  * draft's endpoint through `llm.discoverModels` and merges the ids into the
  * draft. The form also edits the request-image budgets introduced by the
- * 0.1.1-rc.2 harness upgrade: per-model pixel/byte projection budgets and
- * the route-level total inlined payload cap.
+ * 0.1.1-rc.2 harness upgrade: the per-model pixel/byte projection budgets.
+ * There is no route-level total image cap in this plugin — every image is
+ * inlined once it fits its per-image budget, and a request too large for the
+ * endpoint is the endpoint's to refuse (the backend LLM service's own input
+ * limits apply).
+ *
+ * Row identity: model and effort rows carry a stable `key` assigned when the
+ * row is created or discovered, so the React row — and its inputs — keep
+ * their focus across edits. A key derived from the id text would remount the
+ * row on every keystroke (each changed letter is a new key).
  *
  * Styling is inline by design: the client bundle keeps away from the CSS
  * pipeline (no stylesheet route for plugin bundles in the module table), so
@@ -44,13 +52,25 @@ function refFor(loadedRef: string): string {
 
 /** One effort row in flight. `wire` is the raw input text: '' means null. */
 interface EffortDraft {
+  /** Stable row identity (see {@link ModelDraft.key}). */
+  key: number
   id: string
   name: string
   wire: string
 }
 
+/** The row-identity counter is module-local: page state is the only consumer. */
+let nextRowKey = 1
+
+/** Assign a fresh, process-unique row identity. */
+function newKey(): number {
+  return nextRowKey++
+}
+
 /** One model row in flight. Numeric fields keep the raw input text. */
 interface ModelDraft {
+  /** Stable row identity: assigned when the row is created or discovered, so the React row keeps its input focus across edits (a key that includes the id text would remount the row on every keystroke). */
+  key: number
   id: string
   name: string
   contextWindow: string
@@ -71,8 +91,6 @@ interface PageState {
   baseURL: string
   /** The loaded section's `apiKeyEnv` value (a ref or env-var name). */
   apiKeyEnv: string
-  /** Route-level total inlined base64 image payload bound (blank = none). */
-  maxRequestImageBytes: string
   /** Pass-through fields the form does not render (idle timeout, defaults). */
   passthrough: Record<string, unknown>
 }
@@ -138,6 +156,7 @@ function toEfforts(raw: unknown): EffortDraft[] {
   return list.map(entry => {
     const record = field(entry)
     return {
+      key: newKey(),
       id: stringField(record.id),
       name: stringField(record.name),
       wire: record.wire === null ? '' : stringField(record.wire),
@@ -151,6 +170,7 @@ function toModels(raw: unknown): ModelDraft[] {
     const record = field(entry)
     const reasoning = field(record.reasoning)
     return {
+      key: newKey(),
       id: stringField(record.id),
       name: stringField(record.name),
       contextWindow: numberField(record.contextWindow),
@@ -170,13 +190,15 @@ function toModels(raw: unknown): ModelDraft[] {
 /** Parse the resolved section value into page state, segregating passthrough. */
 function parsePage(value: unknown, revision: number): PageState {
   const record = field(value)
-  const { baseURL: _baseURL, apiKeyEnv: _apiKeyEnv, models: _models, maxRequestImageBytes: _maxRequestImageBytes, ...rest } = record
+  const { baseURL: _baseURL, apiKeyEnv: _apiKeyEnv, models: _models, ...rest } = record
   return {
     revision,
     baseURL: stringField(record.baseURL),
     apiKeyEnv: stringField(record.apiKeyEnv),
     draft: toModels(record.models),
-    maxRequestImageBytes: numberField(record.maxRequestImageBytes),
+    // `rest` is pass-through only: legacy sections that still carry a
+    // `maxRequestImageBytes` value (removed from the schema) keep it — the
+    // validator ignores unknown fields, so the value is inert.
     passthrough: rest,
   }
 }
@@ -222,9 +244,6 @@ type KeyMode = 'new' | 'clear' | 'keep'
 function wireSection(state: PageState, keyMode: KeyMode): Record<string, unknown> {
   const section: Record<string, unknown> = { ...state.passthrough }
   if (state.baseURL.length > 0) section.baseURL = state.baseURL
-  if (state.maxRequestImageBytes.length > 0) {
-    section.maxRequestImageBytes = Number(state.maxRequestImageBytes)
-  }
   // A key store pins the effective ref (loaded or derived); a clear drops the
   // reference; keep leaves whatever the section already names untouched.
   const ref = keyMode === 'clear' ? undefined : refFor(state.apiKeyEnv)
@@ -349,6 +368,11 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
         provider: PROVIDER_ROUTE,
       }
       if (page.baseURL.length > 0) request.baseURL = page.baseURL
+      // Probe with what the form shows RIGHT NOW, not what is stored: the
+      // `apiKey` field is interrogation-only (the harness never stores it),
+      // so a key just typed into the form reaches the /models probe without a
+      // save. The clear flag means "no auth on the next probe".
+      if (keyClear === false && keyDraft.length > 0) request.apiKey = keyDraft
       const result = await operations.discoverModels(sectionNs, request)
       if (result.kind === 'refused') {
         setDiscoverError(t('discoverError', { detail: result.message }))
@@ -370,6 +394,7 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
         }
         added += 1
         draft.push({
+          key: newKey(),
           id: hit.id,
           name: hit.name ?? '',
           contextWindow: hit.contextWindow === undefined ? '' : String(hit.contextWindow),
@@ -392,7 +417,7 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
     } finally {
       setDiscovering(false)
     }
-  }, [operations, sectionNs, page, t])
+  }, [operations, sectionNs, page, t, keyDraft, keyClear])
 
   const keyMode: KeyMode = keyClear ? 'clear' : keyDraft.length > 0 ? 'new' : 'keep'
 
@@ -478,18 +503,6 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
       </div>
 
       <div style={css.field}>
-        <span style={css.label}>{t('maxRequestImageBytes')}</span>
-        <input
-          style={css.input}
-          type="number"
-          value={page.maxRequestImageBytes}
-          aria-label={t('maxRequestImageBytes')}
-          onChange={event => { setPage({ ...page, maxRequestImageBytes: event.target.value }); setSaved(false) }}
-        />
-        <span style={css.muted}>{t('imageBudgetHint')}</span>
-      </div>
-
-      <div style={css.field}>
         <div style={css.row}>
           <span style={css.label}>{t('keyInput')}</span>
           {keyStored || page.apiKeyEnv.length > 0
@@ -528,7 +541,7 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
       <div style={css.field}>
         <span style={css.label}>{t('models')}</span>
         {page.draft.map((model, index) => (
-          <div key={`${model.id}-${index}`} style={css.card}>
+          <div key={model.key} style={css.card}>
             <div style={css.cardHead}>
               <span style={css.cardTitle}>{model.id.length > 0 ? model.id : `#${index + 1}`}</span>
               <button
@@ -549,6 +562,7 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
                   style={css.input}
                   type="text"
                   value={model.id}
+                  placeholder={t('modelIdPlaceholder')}
                   aria-label={t('modelId')}
                   onChange={event => setModel(index, { id: event.target.value })}
                 />
@@ -559,11 +573,12 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
                   style={css.input}
                   type="text"
                   value={model.name}
+                  placeholder={t('modelNamePlaceholder')}
                   aria-label={t('modelName')}
                   onChange={event => setModel(index, { name: event.target.value })}
                 />
               </div>
-              <div style={{ ...css.field, width: 110 }}>
+              <div style={{ ...css.field, width: 120 }}>
                 <span style={css.label}>{t('contextWindow')}</span>
                 <input
                   style={css.input}
@@ -573,7 +588,7 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
                   onChange={event => setModel(index, { contextWindow: event.target.value })}
                 />
               </div>
-              <div style={{ ...css.field, width: 110 }}>
+              <div style={{ ...css.field, width: 120 }}>
                 <span style={css.label}>{t('maxTokens')}</span>
                 <input
                   style={css.input}
@@ -583,7 +598,7 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
                   onChange={event => setModel(index, { maxTokens: event.target.value })}
                 />
               </div>
-              <div style={{ ...css.field, width: 110 }}>
+              <div style={{ ...css.field, width: 120 }}>
                 <span style={css.label}>{t('imageMaxPixels')}</span>
                 <input
                   style={css.input}
@@ -593,7 +608,7 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
                   onChange={event => setModel(index, { imageMaxPixels: event.target.value })}
                 />
               </div>
-              <div style={{ ...css.field, width: 110 }}>
+              <div style={{ ...css.field, width: 120 }}>
                 <span style={css.label}>{t('imageMaxBytes')}</span>
                 <input
                   style={css.input}
@@ -637,14 +652,14 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
                     </button>
                   </div>
                   {model.efforts.map((effort, effortIndex) => (
-                    <div key={`${effort.id}-${effortIndex}`} style={{ ...css.row, marginTop: 6 }}>
-                      <div style={{ ...css.field, width: 100 }}>
+                    <div key={effort.key} style={{ ...css.row, marginTop: 6 }}>
+                      <div style={{ ...css.field, width: 120 }}>
                         <span style={css.label}>{t('effortId')}</span>
                         <input
                           style={css.input}
                           type="text"
                           value={effort.id}
-                          aria-label={`${t('effortId')} ${effort.id}`}
+                          aria-label={t('effortId')}
                           onChange={event => setEffort(index, effortIndex, { id: event.target.value })}
                         />
                       </div>
@@ -654,6 +669,7 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
                           style={css.input}
                           type="text"
                           value={effort.name}
+                          placeholder={t('effortNamePlaceholder')}
                           aria-label={t('effortName')}
                           onChange={event => setEffort(index, effortIndex, { name: event.target.value })}
                         />
@@ -664,6 +680,7 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
                           style={css.input}
                           type="text"
                           value={effort.wire}
+                          placeholder={t('effortWirePlaceholder')}
                           aria-label={t('effortWire')}
                           onChange={event => setEffort(index, effortIndex, { wire: event.target.value })}
                         />
@@ -681,10 +698,26 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
                     <button
                       style={css.button}
                       type="button"
-                      onClick={() => setModel(index, { efforts: [...model.efforts, { id: '', name: '', wire: '' }] })}
+                      onClick={() => setModel(index, { efforts: [...model.efforts, { key: newKey(), id: '', name: '', wire: '' }] })}
                     >
                       {t('addEffort')}
                     </button>
+                  </div>
+                  <div style={{ ...css.row, marginTop: 6 }}>
+                    <div style={{ ...css.field, width: 240 }}>
+                      <span style={css.label}>{t('offMode')}</span>
+                      <select
+                        style={css.input}
+                        value={model.offMode}
+                        aria-label={t('offMode')}
+                        onChange={event => setModel(index, { offMode: event.target.value })}
+                      >
+                        <option value="chat-template-kwargs">{t('offModeKwargs')}</option>
+                        <option value="omit">{t('offModeOmit')}</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ ...css.row, marginTop: 6 }}>
                     <div style={{ ...css.field, width: 150 }}>
                       <span style={css.label}>{t('defaultEffort')}</span>
                       <select
@@ -699,18 +732,6 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
                         ))}
                       </select>
                     </div>
-                    <div style={{ ...css.field, width: 240 }}>
-                      <span style={css.label}>{t('offMode')}</span>
-                      <select
-                        style={css.input}
-                        value={model.offMode}
-                        aria-label={t('offMode')}
-                        onChange={event => setModel(index, { offMode: event.target.value })}
-                      >
-                        <option value="chat-template-kwargs">{t('offModeKwargs')}</option>
-                        <option value="omit">{t('offModeOmit')}</option>
-                      </select>
-                    </div>
                   </div>
                 </div>
               )
@@ -722,7 +743,7 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
                     type="button"
                     onClick={() => setModel(index, {
                       hasReasoning: true,
-                      efforts: [{ id: 'off', name: '', wire: 'none' }],
+                      efforts: [{ key: newKey(), id: 'off', name: '', wire: 'none' }],
                     })}
                   >
                     {t('addReasoning')}
@@ -738,6 +759,7 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
             setPage({
               ...page,
               draft: [...page.draft, {
+                key: newKey(),
                 id: '', name: '', contextWindow: '', maxTokens: '',
                 imageMaxPixels: '', imageMaxBytes: '',
                 multimodal: true, preserveThinking: true,

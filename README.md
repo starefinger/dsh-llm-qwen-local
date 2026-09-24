@@ -6,7 +6,15 @@ English | [简体中文](README.zh.md)
 
 DeepSeek Harness LLM adapter plugin for a **locally deployed Qwen model** (e.g. Qwen3.8-27B) served by **vLLM** behind its OpenAI-compatible `/v1/chat/completions` endpoint.
 
-> **v0.4.0** · exact compatibility target: DSH `0.1.2-rc.1` · MIT · community-maintained and not a DeepSeek or Qwen product.
+> **v0.4.1** · exact compatibility target: DSH `0.1.2-rc.1` · MIT · community-maintained and not a DeepSeek or Qwen product.
+
+> **✨ New in v0.4.1 — settings-page fixes; `maxRequestImageBytes` route cap removed**
+>
+> - **No more focus loss while typing a reasoning-effort id (or a model id)** — list rows now key off a stable row identity instead of the id text, so typing no longer remounts the row.
+> - **Shorter, uniform field labels** — long explanations moved into input placeholders; model-card columns are width-aligned.
+> - **`maxRequestImageBytes` (the per-request total image byte cap) is removed** from config, schema, and the settings page. Every image is inlined once it fits its per-image budget (`imageMaxPixels` / `imageMaxBytes` are unchanged); an oversized request is refused by the backend LLM service against its own input limits. A leftover value in an existing `settings.yaml` is silently ignored — no migration needed.
+> - **"Discover models from endpoint" now probes with the key currently in the API Key field** — a freshly typed key works without saving first.
+> - **The model list can be emptied** — `models` no longer requires at least one entry: save an empty list and the route stays mounted but dormant (no selectable models), then re-populate via "discover models from endpoint" or a manual add.
 
 > **✨ New in v0.4.0 — zero runtime `@deepseek-ai` dependencies**
 >
@@ -16,7 +24,7 @@ DeepSeek Harness LLM adapter plugin for a **locally deployed Qwen model** (e.g. 
 >
 > **What does *not* change:** external plugin behavior is identical — provider route `qwen-local`, settings namespace `llm-qwen-local`, the settings page, model discovery, and the wire dialect. The DSH compatibility target stays `0.1.2-rc.1`. The `@deepseek-ai` packages remain **dev-only** type pins (their `import type` references are erased from the build), so existing installs keep working as-is.
 >
-> **Upgrading:** drop-in — just `dsh plugin --profile web add dsh-llm-qwen-local@0.4.0` (or your pinned snapshot tag). No configuration changes required.
+> **Upgrading:** drop-in — just `dsh plugin --profile web add dsh-llm-qwen-local@0.4.1` (or your pinned snapshot tag). No configuration changes required.
 
 ```sh
 dsh plugin --profile web add dsh-llm-qwen-local
@@ -96,7 +104,7 @@ dsh plugin --profile web add github:starefinger/dsh-llm-qwen-local
 dsh plugin --profile web add ./path/to/qwen3.8-LLM-plugin
 
 # or from a packed tarball (prebuilt — no build step on install):
-dsh plugin --profile web add ./dsh-llm-qwen-local-0.4.0.tgz
+dsh plugin --profile web add ./dsh-llm-qwen-local-0.4.1.tgz
 
 # verify the contributed layer, then start:
 dsh --profile web --dump-config
@@ -151,16 +159,17 @@ Click the input footer (model name + effort, e.g. `Qwen3.8-27B (local) xhigh`) t
 
 ## Configuration at a glance
 
-All fields except `models` are optional; schema defaults fill the rest.
+All fields are optional; schema defaults fill the rest.
 
 | Field | Default | Meaning |
 |---|---|---|
 | `baseURL` | `http://127.0.0.1:8000/v1` | Endpoint base; `/chat/completions` is appended. |
 | `apiKeyEnv` | — (no auth header) | Env-var name holding an optional bearer token, read per request. |
-| `models` | **required** | At least one model entry (see below). |
+| `models` | `[]` | Model entries (see below). Empty = the route is mounted but dormant (no selectable models). |
 | `defaultContextWindow` | `262144` | Context capacity used when a model has no exact value. |
 | `maxTokens` | `32768` | Per-request output cap fallback. |
-| `maxRequestImageBytes` | — (keep every image) | Total inlined base64 image payload bound per request; the oldest images are placeholder-swapped when exceeded. |
+
+There is no route-level image cap: every image is inlined once it fits its per-image budget; an oversized request is the backend LLM service's to refuse.
 
 Model entries: `id` (**required**), `name`, `contextWindow`, `maxTokens`, `multimodal` (the vision switch — set `true` for Qwen3.8-27B), `preserveThinking`, `imageMaxPixels`, `imageMaxBytes`, and `reasoning` (absent = no selectable efforts).
 

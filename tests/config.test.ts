@@ -72,7 +72,7 @@ describe('resolveConfig', () => {
     })).toThrow(/defaultEffort "high" is not among/)
   })
 
-  it('refuses duplicate model ids and empty model lists', () => {
+  it('refuses duplicate model ids; accepts an empty model list', () => {
     expect(() => resolveConfig({
       ...BASE,
       models: [
@@ -80,7 +80,13 @@ describe('resolveConfig', () => {
         { id: 'a' },
       ],
     })).toThrow(/duplicate model "a"/)
-    expect(() => resolveConfig({ ...BASE, models: [] })).toThrow(/at least one model/)
+    // An empty list is legal: the route stays mounted but dormant, and the
+    // settings page can re-populate it (discover or manual add). An absent
+    // list resolves the same way.
+    expect(resolveConfig({ ...BASE, models: [] }).models).toEqual([])
+    const without = { ...BASE } as Record<string, unknown>
+    delete without.models
+    expect(resolveConfig(without as Config).models).toEqual([])
   })
 
   it('refuses duplicate effort ids within one model', () => {
@@ -99,10 +105,9 @@ describe('resolveConfig', () => {
     })).toThrow(/duplicate reasoning effort "low"/)
   })
 
-  it('accepts per-model image budgets and the route image byte cap, preserving absence', () => {
+  it('accepts per-model image budgets, preserving absence', () => {
     const resolved = resolveConfig({
       ...BASE,
-      maxRequestImageBytes: 8 * 1024 * 1024,
       models: [{
         id: 'qwen3.8',
         multimodal: true,
@@ -110,7 +115,6 @@ describe('resolveConfig', () => {
         imageMaxBytes: 2048,
       }],
     })
-    expect(resolved.maxRequestImageBytes).toBe(8 * 1024 * 1024)
     expect(resolved.models[0]?.imageMaxPixels).toBe(123_456)
     expect(resolved.models[0]?.imageMaxBytes).toBe(2048)
     expect(resolved.models[0]).not.toHaveProperty('contextWindow')
@@ -119,12 +123,11 @@ describe('resolveConfig', () => {
 
   it('leaves the image fields absent when the config omits them', () => {
     const resolved = resolveConfig(BASE)
-    expect(resolved.maxRequestImageBytes).toBeUndefined()
     expect(resolved.models[0]).not.toHaveProperty('imageMaxPixels')
     expect(resolved.models[0]).not.toHaveProperty('imageMaxBytes')
   })
 
-  it('refuses non-positive image budgets and route cap', () => {
+  it('refuses non-positive image budgets', () => {
     expect(() => resolveConfig({
       ...BASE,
       models: [{ id: 'qwen3.8', imageMaxPixels: 0 }],
@@ -133,7 +136,13 @@ describe('resolveConfig', () => {
       ...BASE,
       models: [{ id: 'qwen3.8', imageMaxBytes: -1 }],
     })).toThrow(/imageMaxBytes must be a positive integer/)
-    expect(() => resolveConfig({ ...BASE, maxRequestImageBytes: 0 }))
-      .toThrow(/maxRequestImageBytes must be a positive safe integer/)
+  })
+
+  it('ignores a legacy maxRequestImageBytes left in a saved section', () => {
+    // The field was removed from the schema: a settings section that still
+    // carries it must load (the validator ignores unknown fields) and resolve
+    // without it — the value is inert.
+    const resolved = resolveConfig({ ...BASE, maxRequestImageBytes: 8 * 1024 * 1024 } as typeof BASE)
+    expect(resolved).not.toHaveProperty('maxRequestImageBytes')
   })
 })

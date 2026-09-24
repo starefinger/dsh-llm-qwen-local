@@ -56,9 +56,8 @@ const modelSchema: z<QwenLocalModel> = z.object({
 export const Config: z<ConfigType> = z.object({
   baseURL: z.string().default(DEFAULT_BASE_URL),
   apiKeyEnv: z.string(),
-  models: z.array(modelSchema).min(1).required(),
+  models: z.array(modelSchema).default([]),
   defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
   maxTokens: z.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
   streamIdleTimeoutMs: z.number().min(1).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
-  maxRequestImageBytes: z.number().step(1).min(1),
 })

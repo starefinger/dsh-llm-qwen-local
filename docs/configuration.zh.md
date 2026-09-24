@@ -6,17 +6,18 @@
 
 ## 路由级字段
 
-除 `models` 外,所有字段在 `cordis.yml` 中都是可选的;其余由 schema 默认值填充。
+所有字段在 `cordis.yml` 中都是可选的;其余由 schema 默认值填充。
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `baseURL` | `http://127.0.0.1:8000/v1` | 端点基址;自动追加 `/chat/completions`。 |
 | `apiKeyEnv` | —(不发送认证头) | 持有可选 bearer token 的环境变量名,每请求读取。缺省/未设置/空白 = 不发送 `Authorization` 头。 |
-| `models` | **必填** | 至少一个模型条目。 |
+| `models` | `[]` | 模型条目。空(或缺省)= 路由保持挂载但休眠——无可选模型——设置页可随时重新填充(从端点发现或手动添加)。 |
 | `defaultContextWindow` | `262144` | 模型没有精确值时使用的上下文容量。 |
 | `maxTokens` | `32768` | 每请求输出上限的兜底值;请求显式值与模型自身上限优先。 |
 | `streamIdleTimeoutMs` | `300000` | 一次流读取挂起期间允许的最大提供方空闲时间。 |
-| `maxRequestImageBytes` | —(保留全部图像) | 每请求内联 base64 图像载荷总量上限;超出时序列化前**最旧**的图像被确定性的文本占位符替换(harness 的 `offloadRequestImages` 策略),使历史繁重的视觉请求仍适配端点的输入上限。 |
+
+**无路由级图像总量上限。** 每张图像按 per-image 预算(`imageMaxPixels` / `imageMaxBytes`,缺省 640,000 像素 / 1 MiB)投影后内联;请求过大时由后端 LLM 服务按其自身输入上限拒绝。
 
 ## 模型条目
 

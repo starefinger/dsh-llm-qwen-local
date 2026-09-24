@@ -70,10 +70,10 @@ describe('boot: real Cordis load-time validation against the frozen Config', () 
   })
 
   it('throws a Cordis ValidationError (not a generic error) for an invalid entry', () => {
-    // No models: the patch entry's one hard requirement.
+    // An absent model list is legal (dormant route); the per-entry rule that
+    // still fails loudly is a null wire on a non-off effort.
     expect(() => cordisResolveConfig(RUNTIME, { baseURL: 'http://127.0.0.1:8000/v1' }))
-      .toThrow(ValidationError)
-    // A reasoning wire that is null on a non-off effort.
+      .not.toThrow()
     expect(() => cordisResolveConfig(RUNTIME, {
       models: [{
         id: 'm',
@@ -88,12 +88,24 @@ describe('boot: real Cordis load-time validation against the frozen Config', () 
 
   it('reports the specific issue message through the ValidationError', () => {
     try {
-      cordisResolveConfig(RUNTIME, { models: [] })
+      // A reasoning wire that is null on a non-off effort is the one hard
+      // per-entry rule left: the issue text surfaces through the validation
+      // wrapper.
+      cordisResolveConfig(RUNTIME, {
+        models: [{
+          id: 'm',
+          reasoning: {
+            efforts: [{ id: 'low', wire: null }],
+            defaultEffort: 'low',
+            offMode: 'chat-template-kwargs',
+          },
+        }],
+      })
       expect.unreachable('expected a ValidationError')
     } catch (error) {
       expect(error).toBeInstanceOf(ValidationError)
       expect((error as Error).message).toMatch(/invalid config:/)
-      expect((error as Error).message).toMatch(/at least one model/)
+      expect((error as Error).message).toMatch(/may not use a null wire/)
     }
   })
 })
@@ -110,8 +122,9 @@ describe('boot: settings-service touchpoints on the frozen Config', () => {
     }
     const resolved = Config(merged)
     expect(resolved.baseURL).toBe('http://127.0.0.1:9000/v1')
-    expect(resolved.models).toHaveLength(1)
-    const model = resolved.models[0]
+    const models = resolved.models ?? []
+    expect(models).toHaveLength(1)
+    const model = models[0]
     if (model === undefined) throw new Error('expected one model')
     expect(model.id).toBe('other-model')
     expect(model.multimodal).toBe(false) // model default filled
@@ -121,25 +134,32 @@ describe('boot: settings-service touchpoints on the frozen Config', () => {
 
   it('answers the frozen envelope for the web form renderer via toJSON()', () => {
     // toJSON() is typed via the schemastery schema shape, but the runtime value
-    // is the frozen plain object; assert against that concrete shape.
+    // is the frozen plain object; assert against that concrete shape. Ref uids
+    // are an artifact of the generator (they renumber on any shape change), so
+    // the assertion follows envelope.uid instead of pinning numbers.
     const envelope = Config.toJSON() as {
       uid: number
-      refs: Record<string, { type?: string; dict?: Record<string, number> }>
+      refs: Record<string, {
+        type?: string
+        meta?: { required?: boolean; min?: number; default?: unknown }
+        dict?: Record<string, number>
+        inner?: number
+      }>
     }
-    expect(envelope.uid).toBe(60)
-    expect(envelope.refs['60']).toBeDefined()
-    const root = envelope.refs['60']
+    const root = envelope.refs[String(envelope.uid)]
     if (root === undefined) throw new Error('expected the root envelope ref')
     expect(root.type).toBe('object')
-    // The frozen envelope's `dict` maps field names to ref uids (numbers).
-    expect(root.dict).toMatchObject({
-      baseURL: 41,
-      apiKeyEnv: 42,
-      models: 45,
-      defaultContextWindow: 49,
-      maxTokens: 53,
-      streamIdleTimeoutMs: 56,
-      maxRequestImageBytes: 59,
-    })
+    // The root dict lists exactly the six route-level field names.
+    expect(Object.keys(root.dict ?? {}).sort()).toEqual([
+      'apiKeyEnv', 'baseURL', 'defaultContextWindow', 'maxTokens', 'models', 'streamIdleTimeoutMs',
+    ])
+    // `models` is an optional array defaulting to [] (no min, no required) —
+    // an empty catalog is a legal (dormant) configuration.
+    const modelsRef = root.dict?.models
+    if (modelsRef === undefined) throw new Error('expected a models ref')
+    const models = envelope.refs[String(modelsRef)]
+    if (models === undefined) throw new Error('expected the models ref object')
+    expect(models.type).toBe('array')
+    expect(models.meta).toEqual({ default: [] })
   })
 })

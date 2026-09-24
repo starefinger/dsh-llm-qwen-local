@@ -6,7 +6,15 @@
 
 用于**本地部署的 Qwen 模型**(如 Qwen3.8-27B)的 DeepSeek Harness LLM 适配器插件,由 **vLLM** 以其 OpenAI 兼容的 `/v1/chat/completions` 端点提供服务。
 
-> **v0.4.0** · 精确兼容目标:DSH `0.1.2-rc.1` · MIT · 社区维护,非 DeepSeek 或 Qwen 官方产品。
+> **v0.4.1** · 精确兼容目标:DSH `0.1.2-rc.1` · MIT · 社区维护,非 DeepSeek 或 Qwen 官方产品。
+
+> **✨ v0.4.1 —— 设置页修复;移除 `maxRequestImageBytes` 路由上限**
+>
+> - **推理档位 id(以及模型 id)输入时不再失焦**——列表行改用稳定的行标识作 React key,敲键时不再重挂载整行。
+> - **字段标签缩短、统一**——长说明移入输入框占位符;模型卡片各列宽度对齐。
+> - **`maxRequestImageBytes`(单请求图像字节总量上限)整体移除**——配置、schema 与设置页都不再有它。每张图像按 per-image 预算(`imageMaxPixels` / `imageMaxBytes` 不变)投影后内联;请求过大时由后端 LLM 服务按其自身输入上限拒绝。已有 `settings.yaml` 里残留的值被静默忽略,无需迁移。
+> - **"从端点发现模型"现在使用 API Key 输入框中当前的 key 探测**——刚填入的 key 无需先点保存即可生效。
+> - **允许清空模型列表**——`models` 不再要求至少一条:清空并保存后路由保持挂载但休眠(无可选模型),之后可"从端点发现模型"或手动添加重新填充。
 
 > **✨ v0.4.0 新特性 —— 零运行时 `@deepseek-ai` 依赖**
 >
@@ -16,7 +24,7 @@
 >
 > **什么*不变*:** 对外插件行为完全一致 —— provider 路由 `qwen-local`、settings 命名空间 `llm-qwen-local`、设置页、模型发现、wire 方言均不变。DSH 兼容目标仍为 `0.1.2-rc.1`。`@deepseek-ai` 各包保留为**仅开发期**的类型固定(其 `import type` 引用在构建中被擦除),因此现有安装方式照旧可用。
 >
-> **升级:** 直接替换 —— `dsh plugin --profile web add dsh-llm-qwen-local@0.4.0`(或使用你的固定快照 tag)。无需任何配置变更。
+> **升级:** 直接替换 —— `dsh plugin --profile web add dsh-llm-qwen-local@0.4.1`(或使用你的固定快照 tag)。无需任何配置变更。
 
 ```sh
 dsh plugin --profile web add dsh-llm-qwen-local
@@ -96,7 +104,7 @@ dsh plugin --profile web add github:starefinger/dsh-llm-qwen-local
 dsh plugin --profile web add ./path/to/qwen3.8-LLM-plugin
 
 # 或从打包好的 tarball 安装(预构建,安装时无需构建):
-dsh plugin --profile web add ./dsh-llm-qwen-local-0.4.0.tgz
+dsh plugin --profile web add ./dsh-llm-qwen-local-0.4.1.tgz
 
 # 验证贡献的层,然后启动:
 dsh --profile web --dump-config
@@ -151,16 +159,17 @@ bundle 的 `cordis.patch.yml` 会插入一行基线 `llm-qwen-local`(模型 `qwe
 
 ## 配置概览
 
-除 `models` 外,所有字段都是可选的;其余由 schema 默认值填充。
+所有字段都是可选的;其余由 schema 默认值填充。
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `baseURL` | `http://127.0.0.1:8000/v1` | 端点基址;自动追加 `/chat/completions`。 |
 | `apiKeyEnv` | —(不发送认证头) | 持有可选 bearer token 的环境变量名,每请求读取。 |
-| `models` | **必填** | 至少一个模型条目(见下)。 |
+| `models` | `[]` | 模型条目(见下)。空列表 = 路由挂载但休眠(无可选模型)。 |
 | `defaultContextWindow` | `262144` | 模型没有精确值时使用的上下文容量。 |
 | `maxTokens` | `32768` | 每请求输出上限的兜底值。 |
-| `maxRequestImageBytes` | —(保留全部图像) | 每请求内联 base64 图像载荷总量上限;超出时最旧的图像被占位符替换。 |
+
+无路由级图像总量上限:每张图像按 per-image 预算投影后内联,请求过大由后端 LLM 服务自行拒绝。
 
 模型条目:`id`(**必填**)、`name`、`contextWindow`、`maxTokens`、`multimodal`(视觉开关——Qwen3.8-27B 设 `true`)、`preserveThinking`、`imageMaxPixels`、`imageMaxBytes`,以及 `reasoning`(缺省 = 该模型不暴露可选档位)。
 

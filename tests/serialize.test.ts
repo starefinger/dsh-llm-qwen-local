@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest'
-// Re-pointed to local modules: serialize (src) throws the local LlmError and
-// reads the local offloadedImageText, so assertions must check the same
-// classes/behaviors. The message-creator helpers stay from the devDependency
-// (tests are not a published artifact).
+// Re-pointed to local modules: serialize (src) throws the local LlmError, so
+// assertions must check the same class. The message-creator helpers stay from
+// the devDependency (tests are not a published artifact).
 import { ToolCallId, ReasoningEffortId } from '../src/harness/brand.js'
 import { LlmError } from '../src/harness/llm-error.js'
-import { offloadedImageText } from '../src/harness/content.js'
 import {
   createAssistantMessage,
   createToolResultMessage,
@@ -681,44 +679,16 @@ describe('serializeRequest: request-image pipeline (0.1.1-rc.2)', () => {
     expect(code).toBe('ATTACHMENT_READ_FAILED')
   })
 
-  it('offloads the oldest image to a text placeholder when the route budget is exceeded', async () => {
+  it('inlines every image — there is no route-level total cap', async () => {
     const store = fakeStore()
     const body = await serializeRequest(
       options({
         model: 'qwen3.8-vl',
-        // two 3-byte images, one per message: each inlines to 4 base64 chars;
-        // a 4-char bound must drop the oldest message's image deterministically.
+        // two 3-byte images, one per message: both inline, even where a small
+        // route cap would once have placeholder-swapped the oldest one — the
+        // request is the endpoint's to refuse if it is too large.
         messages: [imageMessage('att-old', 3), imageMessage('att-new', 3)],
       }),
-      MODEL_VISION,
-      store as unknown as AttachmentStore,
-      4,
-    )
-    // The oldest message's image became the offload placeholder text, so the
-    // message serializes as a plain text user message; the newest message
-    // keeps its image (text + one image_url part).
-    const placeholder = offloadedImageText({
-      attachmentId: AttachmentId('att-old'),
-      mediaType: 'image/png',
-      bytes: 3,
-      width: 1,
-      height: 1,
-    })
-    expect(body.messages).toEqual([
-      { role: 'user', content: `what is in this image?${placeholder}` },
-      { role: 'user', content: [
-        { type: 'text', text: 'what is in this image?' },
-        { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } },
-      ] },
-    ])
-    // Only the surviving image's bytes were read.
-    expect(store.calls.map(call => call.attachmentId)).toEqual([AttachmentId('att-new')])
-  })
-
-  it('keeps every image when the route budget is absent', async () => {
-    const store = fakeStore()
-    const body = await serializeRequest(
-      options({ model: 'qwen3.8-vl', messages: [imageMessage(), imageMessage('att-2')] }),
       MODEL_VISION,
       store as unknown as AttachmentStore,
     )
@@ -726,5 +696,7 @@ describe('serializeRequest: request-image pipeline (0.1.1-rc.2)', () => {
       .filter(message => message.role === 'user' && typeof message.content !== 'string')
       .flatMap(message => (message.content as { type: string }[]).filter(part => part.type === 'image_url'))
     expect(images).toHaveLength(2)
+    // Both images' bytes were read.
+    expect(store.calls.map(call => call.attachmentId)).toEqual([AttachmentId('att-old'), AttachmentId('att-new')])
   })
 })

@@ -133,10 +133,11 @@ export interface QwenLocalModel {
 
 /**
  * Plugin config, validated by the same-named schemastery schema. Every field
- * is optional in yml except `models`: a missing base URL defaults to the
- * loopback vLLM endpoint, a missing API key env name sends no Authorization
- * header (local deployments usually take no credential), and missing
- * capacities fall back to the route defaults below.
+ * is optional in yml: a missing base URL defaults to the loopback vLLM
+ * endpoint, a missing API key env name sends no Authorization header (local
+ * deployments usually take no credential), a missing (or empty) model list
+ * leaves the route dormant, and missing capacities fall back to the route
+ * defaults below.
  */
 export interface Config {
   /** Endpoint base; `/chat/completions` is appended. Defaults to {@link DEFAULT_BASE_URL}. */
@@ -146,22 +147,19 @@ export interface Config {
    * request. Absent or unset = no Authorization header.
    */
   apiKeyEnv?: string
-  /** Models served by this deployment; at least one. */
-  models: QwenLocalModel[]
+  /**
+   * Models served by this deployment; may be empty (absent = empty). An empty
+   * list leaves the route mounted but dormant — no selectable models — and the
+   * settings page can re-populate it via "discover models from endpoint" or a
+   * manual add.
+   */
+  models?: QwenLocalModel[]
   /** Positive context capacity used when a model has no exact value. */
   defaultContextWindow?: number
   /** Default per-request output cap; explicit request values and model caps win. */
   maxTokens?: number
   /** Maximum provider idle time while one stream read is outstanding. */
   streamIdleTimeoutMs?: number
-  /**
-   * Total inlined base64 image payload bound for one request, when the model
-   * catalog keeps images. Requests whose accumulated base64 length exceeds it
-   * have their OLDEST images replaced with a deterministic text placeholder
-   * before serialization (the harness `offloadRequestImages` policy). Absent
-   * = keep every image once each fits its per-image budget.
-   */
-  maxRequestImageBytes?: number
 }
 
 // ── Frozen schemastery envelope for the llm-qwen-local namespace ─────────
@@ -173,7 +171,7 @@ export interface Config {
 // entry via the ~standard surface below. Keep in sync if the Config shape
 // changes (regenerate with scripts/extract-envelope.mjs).
 const ENVELOPE = {
-  uid: 60,
+  uid: 56,
   refs: {
     "1": {
       type: "string",
@@ -183,21 +181,15 @@ const ENVELOPE = {
     },
     "2": {
       type: "string",
-      meta: {
-
-      }
+      meta: {}
     },
     "3": {
       type: "string",
-      meta: {
-
-      }
+      meta: {}
     },
     "4": {
       type: "const",
-      meta: {
-
-      },
+      meta: {},
       value: null
     },
     "6": {
@@ -213,9 +205,7 @@ const ENVELOPE = {
     "7": {
       type: "object",
       meta: {
-        default: {
-
-        }
+        default: {}
       },
       dict: {
         id: 1,
@@ -234,9 +224,7 @@ const ENVELOPE = {
     },
     "11": {
       type: "string",
-      meta: {
-
-      }
+      meta: {}
     },
     "14": {
       type: "const",
@@ -265,9 +253,7 @@ const ENVELOPE = {
     "18": {
       type: "object",
       meta: {
-        default: {
-
-        }
+        default: {}
       },
       dict: {
         efforts: 10,
@@ -283,15 +269,11 @@ const ENVELOPE = {
     },
     "21": {
       type: "string",
-      meta: {
-
-      }
+      meta: {}
     },
     "22": {
       type: "string",
-      meta: {
-
-      }
+      meta: {}
     },
     "25": {
       type: "number",
@@ -336,9 +318,7 @@ const ENVELOPE = {
     "39": {
       type: "object",
       meta: {
-        default: {
-
-        }
+        default: {}
       },
       dict: {
         id: 20,
@@ -361,20 +341,16 @@ const ENVELOPE = {
     },
     "42": {
       type: "string",
-      meta: {
-
-      }
+      meta: {}
     },
-    "45": {
+    "44": {
       type: "array",
       meta: {
-        default: [],
-        min: 1,
-        required: true
+        default: []
       },
       inner: 39
     },
-    "49": {
+    "48": {
       type: "number",
       meta: {
         step: 1,
@@ -382,7 +358,7 @@ const ENVELOPE = {
         default: 262144
       }
     },
-    "53": {
+    "52": {
       type: "number",
       meta: {
         step: 1,
@@ -390,35 +366,25 @@ const ENVELOPE = {
         default: 32768
       }
     },
-    "56": {
+    "55": {
       type: "number",
       meta: {
         min: 1,
         default: 300000
       }
     },
-    "59": {
-      type: "number",
-      meta: {
-        step: 1,
-        min: 1
-      }
-    },
-    "60": {
+    "56": {
       type: "object",
       meta: {
-        default: {
-
-        }
+        default: {}
       },
       dict: {
         baseURL: 41,
         apiKeyEnv: 42,
-        models: 45,
-        defaultContextWindow: 49,
-        maxTokens: 53,
-        streamIdleTimeoutMs: 56,
-        maxRequestImageBytes: 59
+        models: 44,
+        defaultContextWindow: 48,
+        maxTokens: 52,
+        streamIdleTimeoutMs: 55
       }
     }
   }
@@ -487,8 +453,6 @@ export interface QwenLocalOptions {
   maxTokens: number
   /** Maximum provider idle time while one stream read is outstanding. */
   streamIdleTimeoutMs: number
-  /** Total inlined base64 image payload bound; absent = keep every image. */
-  maxRequestImageBytes?: number
 }
 
 const PKG = 'dsh-llm-qwen-local'
@@ -586,11 +550,10 @@ function resolveModel(raw: QwenLocalModel, index: number): QwenLocalModel {
  * @returns validated request facts.
  */
 export function resolveConfig(config: Config): QwenLocalOptions {
-  if (config.models === undefined || config.models.length === 0) {
-    throw new Error(`${PKG}: at least one model must be configured`)
-  }
+  // An empty (or absent) model list is legal: the route stays mounted with no
+  // selectable models (dormant), and the settings page can re-populate it.
   const seen = new Set<string>()
-  const models = config.models.map((model, index) => {
+  const models = (config.models ?? []).map((model, index) => {
     if (seen.has(model.id)) throw new Error(`${PKG}: duplicate model "${model.id}"`)
     seen.add(model.id)
     return resolveModel(model, index)
@@ -607,11 +570,6 @@ export function resolveConfig(config: Config): QwenLocalOptions {
   if (!Number.isFinite(streamIdleTimeoutMs) || streamIdleTimeoutMs <= 0) {
     throw new Error(`${PKG}: streamIdleTimeoutMs must be a positive finite number`)
   }
-  const maxRequestImageBytes = config.maxRequestImageBytes
-  if (maxRequestImageBytes !== undefined
-    && (!Number.isSafeInteger(maxRequestImageBytes) || maxRequestImageBytes <= 0)) {
-    throw new Error(`${PKG}: maxRequestImageBytes must be a positive safe integer`)
-  }
   const baseURL = config.baseURL ?? DEFAULT_BASE_URL
   if (baseURL.length === 0) throw new Error(`${PKG}: baseURL must be a non-empty string`)
   return {
@@ -623,6 +581,5 @@ export function resolveConfig(config: Config): QwenLocalOptions {
     defaultContextWindow,
     maxTokens,
     streamIdleTimeoutMs,
-    ...maxRequestImageBytes === undefined ? {} : { maxRequestImageBytes },
   }
 }

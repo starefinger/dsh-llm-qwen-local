@@ -51,11 +51,7 @@
  * @module dsh-llm-qwen-local/serialize
  */
 
-import {
-  contentHasImage,
-  offloadRequestImagesWithPolicy,
-  offloadedImageText,
-} from './harness/content.js'
+import { contentHasImage } from './harness/content.js'
 import { LlmError } from './harness/llm-error.js'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import type {
@@ -436,36 +432,25 @@ export async function serializeMessages(
 /**
  * Build the full wire request. Always streaming (`stream: true`, usage
  * reporting on); optional fields are omitted rather than sent as null, so
- * deployment defaults apply. When `maxRequestImageBytes` bounds the route's
- * total inlined payload, the OLDEST images are replaced with a deterministic
- * text placeholder first (the harness `offloadRequestImages` policy), so a
- * history-heavy vision request still fits the endpoint's input cap.
+ * deployment defaults apply. Every image in the history is inlined once it
+ * fits its per-image budget — there is no route-level total cap: a request
+ * that is too large for the endpoint is the endpoint's to refuse, matching
+ * the backend LLM service's own input limits.
  * @param options - the harness request (model, history, system, tools, sampling).
  * @param model - the resolved model configuration.
  * @param attachments - durable byte resolver; `undefined` refuses any image.
- * @param maxRequestImageBytes - route-level total inlined base64 payload bound; absent = keep every image.
  * @returns the chat-completions request body.
  */
 export async function serializeRequest(
   options: GenerateOptions,
   model: QwenLocalModel,
   attachments: AttachmentStore | undefined,
-  maxRequestImageBytes?: number,
 ): Promise<WireRequest> {
   const messages: WireMessage[] = []
   if (options.system !== undefined) {
     messages.push({ role: 'system', content: options.system })
   }
-  const history = maxRequestImageBytes === undefined
-    || !options.messages.some(message => contentHasImage(message.content))
-    ? options.messages
-    : offloadRequestImagesWithPolicy(options.messages, {
-      representation: 'base64',
-      maxBytes: maxRequestImageBytes,
-      byteQuantum: 1,
-      placeholder: (ref) => offloadedImageText(ref),
-    })
-  messages.push(...await serializeMessages(history, model, attachments, options.signal))
+  messages.push(...await serializeMessages(options.messages, model, attachments, options.signal))
 
   const tools: WireTool[] | undefined = options.tools === undefined || options.tools.length === 0
     ? undefined
