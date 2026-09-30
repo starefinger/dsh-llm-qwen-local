@@ -70,24 +70,24 @@ wire 强制的严格 OpenAI 摆位是 `image_url` 部件只能搭乘 `user` 消�
 - **llama.cpp / Ollama**——部分支持:标准路径(文本/工具/图像)可用。`chat_template_kwargs` 不被识别 → 设置 `offMode: omit`(此时 `off` 仅表示省略参数;无法按请求关闭思考)。`reasoning_effort` 不被识别 → 不声明 `reasoning` 块。思考流可分离仅当服务端发出 `reasoning_content`(llama.cpp:`--reasoning-format deepseek`)。
 - **DashScope / Qwen 云**——不支持:其 OpenAI 兼容端点把 `enable_thinking` 作为**顶层**参数接收,而不是放在 `chat_template_kwargs` 内,本适配器没有顶层模板变量的配置项。需要按档位的额外参数设计;超出 v1 范围(适配器面向本地 OpenAI 兼容服务器)。
 
-## 前端配置(Web Models 页 / 设置)
+## 前端配置(Web Plugins 页 / 设置)
 
 前端配置分两面:**node 半**把 DSH 配置面消费的四个钩子接起来(与 `llm-deepseek` 和 `llm-pi-ai` 使用的一样),**client 半**渲染可编辑页面。
 
 Node 半(宿主暴露的配置面):
 
-- **设置节**(settings section)——插件的 `Config` schema 被安装为 `llm-qwen-local` 用户设置节(`installSettingsSection`)。这使得该节成为宿主的单一事实来源:可经设置 RPC(`settings.describe` / `settings.replace`)与 `settings.yaml` 读写。提交会**实时**切换配置源——适配器每请求重新解析,所以保存的变更无需重启即达下一次模型调用。不可服务的节在其写入处被拒绝。仅这一面*不会*画页面——web 设置模态框只渲染 client 插件注册进 `settings.section` 槽的页面。
-- **可配置提供方目录**——`qwen-local` 路由经 `registerConfigurableProviders` 注册,使 web Models 页将其列为行(活跃或休眠)。它的命名空间也使设置 RPC 向配置客户端暴露 `llm-qwen-local`。
-- **模型发现**——`registerModelDiscovery` 应答 `llm.discoverModels`:命名了 `baseURL` 的草稿触发 `GET {baseURL}/models` 探测(草稿的一次性 key——设置页传入表单中当前的 key,所以新填入的 key 无需保存即可探测——否则路由的已存凭证,否则免认证);命名了路由但没有端点的草稿直接由已配置目录回答,无网络调用。
+- **设置节**(settings section)——DSH 0.2.0 中,settings 服务自行把插件 volatile `Config`(冻结 envelope 上标记 `volatile` 的六个路由级字段)投影为 `llm-qwen-local` 节:无需注册设置节,该节是宿主的单一事实来源,提交的写入经 profile 的 Cordis patch 走正常 Loader 路径持久化。volatile 字段以 live 引用形式进入 `apply()`,写入提交时由运行时原地更新,适配器每请求重新读取——所以保存的变更无需重启即达下一次模型调用。node 半另经 `settings.configure({ auto: false })` 记录页面策略(不出现自动生成的设置页);可编辑表单是 client 半在 Plugins 页上、渲染于 bundle 详情页的内联配置表单。
+- **可配置提供方目录**——`qwen-local` 路由经 `registerConfigurableProviders` 注册,使 web Models 页将其列为行(活跃或休眠)。它的命名空间也使 settings 服务向配置客户端暴露 `llm-qwen-local`。
+- **模型发现**——`registerModelDiscovery` 应答 `llm.discoverModels`:命名了 `baseURL` 的草稿触发 `GET {baseURL}/models` 探测(草稿的一次性 key——配置页传入表单中当前的 key,所以新填入的 key 无需保存即可探测——否则路由的已存凭证,否则免认证);命名了路由但没有端点的草稿直接由已配置目录回答,无网络调用。
 - **凭证**——该节的 `apiKeyEnv` 字段是一个*名字*(凭证 ref 或环境变量名),绝不是 key 值。适配器先经持久凭证服务(即 web Models 页写入 key 的服务)解析,再落到启动环境。未命中以 `MISSING_CREDENTIAL` 大声失败,而不是让部署捡到无关的环境 key——名字无法解析也意味着发现探测回退到免认证,受认证的 vLLM 会回答 `401`。
 
 Client 半(你实际编辑的页面):
 
-- `src/client` 是一个 **client 插件**(声明于 `dsh.client`,以 `./client` 导出,构建为模块表 bundle `lib/client.js`)。它向设置模态框的 `settings.section` 槽注册一个 `Qwen 本地 (vLLM)` 页面,并在 `llm-qwen-local` 节上渲染一个表单:`baseURL`、**API Key** 字段、模型列表(id / 名称 / 容量 / 图像预算 / 多模态 / `preserveThinking` / 推理档位)、**从端点发现模型**按钮(经 `llm.discoverModels` 探测草稿端点并合并 id)、**保存**(经 `settings.replace` 写入整节)。**无路由级 `maxRequestImageBytes`**——该字段已从插件中完全移除(配置、schema 与页面均无):每张图像按 per-image 预算投影后内联,请求过大由后端 LLM 服务按其自身输入上限拒绝。宿主按 schema 校验草稿并回传脱敏值;schema 违规就地显示。文案经 DSH locale 注册表中英双语,页面在 `settings/document-updated` 时重新拉取,使两个打开的界面收敛。
+- `src/client` 是一个 **client 插件**(声明于 `dsh.client`,以 `./client` 导出,构建为模块表 bundle `lib/client.js`)。它向 Web 侧边栏 Plugins 页注册该行的配置页(`plugins.bundle.config` 槽,key 为 `dsh-llm-qwen-local`——bundle 包名——并内联渲染于 bundle 详情页,与官方单配置 bundle 使用同一表面;0.2.0 把插件配置放在 Plugins 页,设置窗口只保留只读的内建插件清单),并在 `llm-qwen-local` 节上渲染一个表单:`baseURL`、**API Key** 字段、模型列表(id / 名称 / 容量 / 图像预算 / 多模态 / `preserveThinking` / 推理档位)、**从端点发现模型**按钮(经 `llm.discoverModels` 探测草稿端点并合并 id)、**保存**(经共享 `ConfigForm` scope 提交一个以 section 根为路径的原子 `set` 操作,以草稿读取时的版本为围栏)。注册经 `whileServed` 限定到该命名空间,故内联表单只在行启用时存在。**无路由级 `maxRequestImageBytes`**——该字段已从插件中完全移除(配置、schema 与页面均无):每张图像按 per-image 预算投影后内联,请求过大由后端 LLM 服务按其自身输入上限拒绝。宿主按 schema 校验草稿并回传解析值;schema 违规就地显示。文案经 DSH locale 注册表中英双语,页面跟随 scope 的快照订阅(共享 mirror 把提交的写入与宿主失效事件折叠进来),使两个打开的界面收敛。
   - **API Key** 字段遵循核心 Models 页约定:值经 `credentials.set` 写入持久凭证服务下由提供方派生的 ref `QWEN_LOCAL_API_KEY`,该节的 `apiKeyEnv` 记录这个 ref 名——原始 key 永不落入 `settings.yaml`。留空保持当前 key(未存 key 时则不发送 `Authorization` 头);**清除**按钮删除已存凭证与引用。若该节已命名一个本页面不管理的 ref(例如粘贴的原始 key),表单会标红——适配器无法解析它,端点会持续回答 `401`。
-- bundle 只依赖平台 `react` / `react/jsx-runtime` 模块——所有 DSH 类型导入均为 type-only 并被擦除,全部服务经注入的 `slots` / `locale` / `connection` / `remote` 面到达。`pnpm build` 对两半都做类型检查,并在 `lib/` 旁产出 `lib/client.js`。
+- bundle 只依赖平台 `react` / `react/jsx-runtime` 模块——所有 DSH 类型导入均为 type-only 并被擦除,全部服务经注入的 `slots` / `locale` / `remote` / `configForms` 面到达。`pnpm build` 对两半都做类型检查,并在 `lib/` 旁产出 `lib/client.js`。
 
-范围说明:Models 页的*精选*按家族编辑器卡片(baseURL/key/模型目录表单)只在 `ui-settings-models` client 包中为 `llm-deepseek` 与 `llm-pi-ai` 两个命名空间手写。不属于这两个家族的路由会列在 Models 页上,但渲染通用的"其余请在 settings.yaml 中编辑"提示——Models 页没有第三方编辑器卡片的槽。因此本插件提供的可编辑面是专用的**设置页**,而不是 Models 页卡片。专门的 Models 卡片将是 `ui-settings-models` 的核心贡献,而非插件侧改动。
+范围说明:Models 页的*精选*按家族编辑器卡片(baseURL/key/模型目录表单)只在 `ui-settings-models` client 包中为 `llm-deepseek` 与 `llm-pi-ai` 两个命名空间手写。不属于这两个家族的路由会列在 Models 页上,但渲染通用的"其余字段在 cordis.patch.yml 中,请直接编辑对应段"提示——Models 页没有第三方编辑器卡片的槽。因此本插件提供的可编辑面是专用的 **Plugins 页内联配置表单**(渲染于 bundle 详情页),而不是 Models 页卡片。专门的 Models 卡片将是 `ui-settings-models` 的核心贡献,而非插件侧改动。
 
 ## 错误路径
 
@@ -114,4 +114,4 @@ Client 半(你实际编辑的页面):
 - 它不询问 vLLM 端点——`multimodal`、上下文容量、推理档位都是**关于你部署的声明**,声明错误的代价是回合中途的拒绝(或对低报视觉能力的静默纯文本投影),而不是协商出的能力。
 - 它不支持 DashScope / 通义云或任何非 OpenAI 兼容的 Qwen 端点;目标是本地 vLLM(或兼容)服务。
 - 它不把图像理解扩展到视频、音频、PDF 或图像生成。
-- 它不替换 DSH 的会话日志、附件管线或模型选择器;它贡献一条 LLM 路由、一个设置 section 和一个设置页面。
+- 它不替换 DSH 的会话日志、附件管线或模型选择器;它贡献一条 LLM 路由、一个设置 section 和一个配置页面(在 Plugins 页上)。

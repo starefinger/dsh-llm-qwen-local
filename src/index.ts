@@ -7,15 +7,24 @@
  * because not every composition mounts one (text-only deployments never
  * need attachments; local vLLM often uses no auth at all).
  *
- * Frontend configuration: the plugin's `Config` schema is installed as the
- * `llm-qwen-local` user-settings section through the settings service's
- * `installSection` seam (attached only while a settings service is mounted),
- * so the web settings surface renders an editable form for it; commits switch
- * the configuration source live. The
- * provider is registered in the configurable-provider directory (the web
- * Models page offers it as a row, live or dormant) and a model-discovery
- * hook interrogates a draft's `GET /models` endpoint so the Models page can
- * prefill the catalog from a live deployment.
+ * Frontend configuration: on DSH >= 0.2.0 the settings service projects the
+ * plugin's `Config` schema into the `llm-qwen-local` user-settings section on
+ * its own (the volatile fields of the frozen envelope carry the marks that
+ * make them editable), and committed writes persist through the profile's
+ * Cordis patch and the normal loader path; the volatile fields arrive in
+ * `apply()` as live references the runtime updates in place when a settings
+ * write commits, and the plugin re-reads them through {@link liveValue} per
+ * request. (DSH 0.1.2 built this section through the removed
+ * `settings.installSection` seam and switched the configuration source
+ * explicitly.) The plugin's client bundle renders the editable form inline on
+ * the bundle's detail page on the Web sidebar's Plugins page
+ * (`plugins.bundle.config`, keyed by the package name), not in the settings
+ * window — 0.2.0 places plugin configuration there and keeps the settings
+ * window on the read-only built-in inventory. The provider is registered in
+ * the configurable-provider directory (the web Models page offers it as a row,
+ * live or dormant) and a model-discovery hook interrogates a draft's
+ * `GET /models` endpoint so the page can prefill the catalog from a live
+ * deployment.
  *
  * ```yaml
  * - id: llm-qwen-local
@@ -48,6 +57,7 @@ import { QwenLocalAdapter } from './adapter.js'
 import { Config, resolveConfig } from './config.js'
 import type { QwenLocalOptions } from './config.js'
 import { discoverQwenModels } from './discovery.js'
+import { liveValue } from './live-config.js'
 
 export {
   bearerKey,
@@ -55,6 +65,7 @@ export {
   IdleTimeout,
   QwenLocalAdapter,
 } from './adapter.js'
+export { isVolatileRef, liveValue } from './live-config.js'
 export type { QwenLocalAdapterOptions } from './adapter.js'
 export {
   Config,
@@ -76,13 +87,15 @@ export type {
 export { discoverQwenModels } from './discovery.js'
 export type { QwenLocalDiscoveryFacts } from './discovery.js'
 export {
-  imagePolicy,
+  imageRequestBudget,
+  imageRequestTarget,
+  offloadedImageText,
   resolveRequestImageBytes,
   serializeMessages,
   serializeRequest,
   unlistedModel,
 } from './serialize.js'
-export type { RequestImageBytes } from './serialize.js'
+export type { ImageRequestBudget, RequestImageBytes } from './serialize.js'
 export { DONE, parseSse } from './sse.js'
 export { mapFinishReason, mapUsage, translate } from './translate.js'
 export type * from './wire.js'
@@ -102,12 +115,14 @@ export const NS = 'llm-qwen-local'
 // loudly on invalid values.
 
 export function apply(ctx: Context, config: Config): void {
-  // The configuration source: the composition entry while no settings scope
-  // is attached, the resolved settings section otherwise. Re-resolved per
-  // request — resolveConfig is a pure, cheap validation pass, so a change
-  // reaches the next request without the plugin re-registering, while an
-  // in-flight stream keeps the facts it started with.
-  let current: () => Config = () => config
+  // The configuration source: the composition entry's volatile fields,
+  // re-read through the live references per request — resolveConfig is a
+  // pure, cheap validation pass, so a settings write reaches the next
+  // request without the plugin re-registering, while an in-flight stream
+  // keeps the facts it started with. (0.2.0: the 0.1.2 `installSection`
+  // setSource seam is gone — the runtime updates the references in place
+  // instead, and plain pre-0.2 values pass through liveValue unchanged.)
+  const current = (): Config => liveValue(config) as Config
   const options = (): QwenLocalOptions => resolveConfig(current())
   // Validate once at load so an invalid config fails the plugin loudly here,
   // not on the first model call.
@@ -170,28 +185,19 @@ export function apply(ctx: Context, config: Config): void {
       }
     },
   }, signal))
-  // Optional-settings consumer wiring: the section schema resolves the whole
-  // profile, a write that could not be served is refused where it is written
-  // (validate), and a committed change switches the source before the
-  // adapter's next per-request resolution. The settings service is optional,
-  // so the consumer attaches only while one is mounted (0.1.2 seam).
+  // 0.2.0 settings seam: the settings service projects this entry's `Config`
+  // schema into its editable form on its own (the volatile fields of the
+  // frozen envelope) and commits writes through the config editor's normal
+  // loader path, so no section registration is needed — the live source
+  // arrives through the volatile references `current()` re-reads. `configure`
+  // only records this instance's page policy (auto-generated settings pages
+  // stay closed; the editable form is the client bundle's configuration page
+  // rendered inline on the bundle's detail page over the `plugins.bundle.config`
+  // slot). The
+  // settings service is optional, so the wiring attaches only while one is
+  // mounted.
   ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.installSection(ctx, NS, Config, config, {
-      validate: (value) => {
-        resolveConfig(value)
-      },
-      setSource: (source) => {
-        current = source
-      },
-      // The adapter re-resolves options() per stream, and the catalog plus the
-      // discovery hook read the same source, so no re-registration is needed —
-      // the fixed route set never changes, only the facts behind it.
-      onChange: () => {
-        // Re-validate through the new source now: an unserviceable section
-        // cannot hide behind a lazy per-request resolution.
-        options()
-      },
-    })
+    settingsCtx.effect(() => settingsCtx.settings.configure({ auto: false }, ctx.fiber))
   })
   ctx.llm.registerAdapter([PROVIDER], adapter)
 }

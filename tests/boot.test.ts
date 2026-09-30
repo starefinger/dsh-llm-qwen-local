@@ -154,12 +154,15 @@ describe('boot: settings-service touchpoints on the frozen Config', () => {
       'apiKeyEnv', 'baseURL', 'defaultContextWindow', 'maxTokens', 'models', 'streamIdleTimeoutMs',
     ])
     // `models` is an optional array defaulting to [] (no min, no required) —
-    // an empty catalog is a legal (dormant) configuration.
+    // an empty catalog is a legal (dormant) configuration. The six route-level
+    // fields are marked volatile (0.2.0 cold-start fix), so `models` carries
+    // that mark in its meta: the settings service rehydrates volatile
+    // subtrees live, so a settings write reaches the next request.
     const modelsRef = root.dict?.models
     if (modelsRef === undefined) throw new Error('expected a models ref')
     const models = envelope.refs[String(modelsRef)]
     if (models === undefined) throw new Error('expected the models ref object')
     expect(models.type).toBe('array')
-    expect(models.meta).toEqual({ default: [] })
+    expect(models.meta).toEqual({ default: [], volatile: true })
   })
 })

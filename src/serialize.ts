@@ -2,6 +2,18 @@
  * Serialize harness messages into vLLM chat-completions requests for local
  * Qwen models.
  *
+ * Message model (DSH >= 0.2.0): the harness conversation is a
+ * `RequestMessage[]` — durable role messages (`system`, `developer`,
+ * `user`, `assistant`, `tool`) plus identity-free one-shot `RequestUserInput`
+ * entries. Tool results are FIRST-CLASS `role: 'tool'` messages
+ * (`ToolResultMessage`, keyed by `toolCallId`), no longer content blocks, so
+ * the 0.1.2 "split tool-result blocks out of user messages" pass is gone:
+ * each tool-role message serializes to its own wire `role: 'tool'` entry.
+ * `developer` messages carry incremental tool-change blocks that the runtime
+ * projects away for routes that declare no `toolUpdate` (this one); a
+ * direct (non-runtime) caller that hands one to the adapter is refused with
+ * `UNSUPPORTED_CONTENT`, matching the reference adapter.
+ *
  * Multimodal policy: a user message with image parts serializes to a
  * `content` array of `text` and `image_url` (data URL) parts ONLY when the
  * selected model declares `multimodal: true`. The gate runs before any
@@ -12,13 +24,19 @@
  *
  * Request-image projection: image bytes go through the durable attachment
  * service's request-image pipeline (`readImageRequest`) when the mounted
- * provider implements it — deterministic aspect-preserving projection to the
- * model's pixel/byte budget plus cached variants — and fall back to the
+ * provider implements one — deterministic aspect-preserving projection to
+ * the model's pixel/byte budget plus cached variants — and fall back to the
  * normalized master bytes (`readImage`) when the provider cannot project.
- * Harness note: since the LLM runtime now projects images to text
- * placeholders for models whose `inputModalities` exclude `image`, the
- * text-only gate below is a direct-adapter defense; the harness path replaces
- * the image before the adapter ever sees it.
+ * The 0.2.0 `readImageRequest` takes an exact per-image target
+ * (`ImageRequestTarget { width, height, maxBytes }`), so the model's pixel
+ * budget is applied per occurrence with the harness projection geometry
+ * (`requestImageDimensions` in `./harness/image-target.js`).
+ * Offloaded image blocks (`offloaded: true`, the harness's request-limit
+ * omission) serialize to the deterministic placeholder text instead of
+ * bytes, mirroring `dsh-llm`'s `offloadedImageText` no-access form.
+ * Harness note: the LLM runtime also projects images to text placeholders for
+ * models whose `inputModalities` exclude `image` (before the adapter sees
+ * them), so the text-only gate below is a direct-adapter defense.
  *
  * Reasoning policy: the selected effort (`GenerateOptions.reasoningEffort`,
  * else the model's configured `defaultEffort`) maps through the model's
@@ -53,12 +71,20 @@
 
 import { contentHasImage } from './harness/content.js'
 import { LlmError } from './harness/llm-error.js'
-import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
+import { requestImageDimensions } from './harness/image-target.js'
+import type {
+  ContentBlock,
+  GenerateOptions,
+  ImageBlock,
+  RequestMessage,
+  ToolResultMessage,
+} from '@deepseek-ai/dsh-llm'
 import type {
   AttachmentStore,
   ImageAttachmentRef,
   ImageMediaType,
-  ImageRequestPolicy,
+  ImageRequestTarget,
+  RequestImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
 import {
   DEFAULT_IMAGE_MAX_BYTES,
@@ -93,19 +119,19 @@ const PROJECTION_UNSUPPORTED = 'ATTACHMENT_PROJECTION_UNSUPPORTED'
  * rejection falls back, every other failure propagates.
  * @param attachments - durable byte resolver (required whenever an image is present).
  * @param ref - the durable image reference from the session log.
- * @param policy - pixel and encoded-byte budgets for the request version.
+ * @param target - the exact per-image request target (width, height, byte cap).
  * @param signal - cancellation for the backend work.
  * @returns request bytes and their media type.
  */
 export async function resolveRequestImageBytes(
   attachments: AttachmentStore,
   ref: ImageAttachmentRef,
-  policy: ImageRequestPolicy,
+  target: ImageRequestTarget,
   signal?: AbortSignal,
 ): Promise<RequestImageBytes> {
   if (typeof attachments.readImageRequest === 'function') {
     try {
-      const projected = await attachments.readImageRequest(ref, policy, signal)
+      const projected = await attachments.readImageRequest(ref, target, signal)
       return { data: projected.data, mediaType: projected.mediaType }
     } catch (error: unknown) {
       // Duck-type the rejection by its `code` OWN property, not by class
@@ -124,15 +150,46 @@ export async function resolveRequestImageBytes(
   return { data: stored.data, mediaType: stored.ref.mediaType }
 }
 
+/** The pixel and encoded-byte budgets one resolved model contributes. */
+export interface ImageRequestBudget {
+  maxPixels: number
+  maxBytes: number
+}
+
 /**
- * The request-image policy one resolved model contributes: pixel and encoded
+ * The request-image budget one resolved model contributes: pixel and encoded
  * byte budgets with the harness canonical defaults, overridable per model.
  */
-export function imagePolicy(model: QwenLocalModel): ImageRequestPolicy {
+export function imageRequestBudget(model: QwenLocalModel): ImageRequestBudget {
   return {
     maxPixels: model.imageMaxPixels ?? DEFAULT_IMAGE_MAX_PIXELS,
     maxBytes: model.imageMaxBytes ?? DEFAULT_IMAGE_MAX_BYTES,
   }
+}
+
+/**
+ * The exact per-image `readImageRequest` target: the model's pixel budget
+ * applied to one occurrence's intrinsic size (aspect-preserving, never
+ * enlarged) plus the route's encoded-byte cap.
+ */
+export function imageRequestTarget(ref: ImageAttachmentRef, budget: ImageRequestBudget): ImageRequestTarget {
+  return {
+    ...requestImageDimensions(ref.width, ref.height, budget.maxPixels),
+    maxBytes: budget.maxBytes,
+  }
+}
+
+/**
+ * Deterministic placeholder for one offloaded image occurrence, mirroring
+ * `dsh-llm`'s `offloadedImageText` no-access form (the local adapter cannot
+ * resolve execution-world read paths). Reproduced locally because the
+ * published plugin carries no runtime dependency on the package.
+ */
+export function offloadedImageText(ref: ImageAttachmentRef): string {
+  const identity = ref.name === undefined
+    ? String(ref.attachmentId)
+    : `${JSON.stringify(ref.name)} (${ref.attachmentId})`
+  return `[image omitted to fit request image limits; ${identity}. No local normalized image path is available; ask the user to attach it again if needed.]`
 }
 
 /** The request-level wire control fields one resolved model contributes. */
@@ -224,12 +281,12 @@ function flattenText(blocks: readonly ContentBlock[]): string {
 const TOOL_IMAGE_CAPTION = 'Images returned by the tool call above are attached.'
 
 /**
- * Split image parts out of tool results for a multimodal model: the
+ * Split image parts out of one tool result for a multimodal model: the
  * tool message serializes text-only and the images re-emerge as parts of
  * one follow-up `role: 'user'` multimodal message (caption first, then the
  * image parts in tool-result order). Mirrors the QwenLM `qwen-code`
  * `splitToolMedia` fix for strict OpenAI-compatible backends.
- * @param result - one tool result from the harness history.
+ * @param result - one tool-result message from the harness history.
  * @param model - the resolved model configuration.
  * @param attachments - durable byte resolver, required when an image is present.
  * @param signal - cancellation for attachment reads.
@@ -237,7 +294,7 @@ const TOOL_IMAGE_CAPTION = 'Images returned by the tool call above are attached.
  * @throws LlmError `UNSUPPORTED_CONTENT` when an image is present without the attachment service.
  */
 async function splitToolResultImages(
-  result: Extract<ContentBlock, { type: 'tool-result' }>,
+  result: ToolResultMessage,
   model: QwenLocalModel,
   attachments: AttachmentStore | undefined,
   signal: AbortSignal | undefined,
@@ -246,7 +303,7 @@ async function splitToolResultImages(
   if (!hasImage) {
     return [{
       role: 'tool',
-      tool_call_id: result.toolCallId,
+      tool_call_id: String(result.toolCallId),
       // Empty tool output still needs SOME content on the wire.
       content: flattenText(result.content) || '(no output)',
     }]
@@ -257,7 +314,7 @@ async function splitToolResultImages(
       'UNSUPPORTED_CONTENT',
     )
   }
-  const images = result.content.filter((block): block is ContentBlock & { type: 'image' } => block.type === 'image')
+  const images = result.content.filter((block): block is ImageBlock => block.type === 'image')
   const parts = await serializeParts(
     [{ type: 'text', text: TOOL_IMAGE_CAPTION }, ...images],
     model,
@@ -267,7 +324,7 @@ async function splitToolResultImages(
   return [
     {
       role: 'tool',
-      tool_call_id: result.toolCallId,
+      tool_call_id: String(result.toolCallId),
       // The tool's text survives the split; an image-only result gets the
       // placeholder (a tool message always carries SOME content on the wire).
       content: flattenText(result.content) || '(no output)',
@@ -286,7 +343,12 @@ function assertNoImage(blocks: readonly ContentBlock[], model: QwenLocalModel, w
   }
 }
 
-/** Serialize one multimodal user message's parts, resolving image bytes durably. */
+/**
+ * Serialize one multimodal content list's parts, resolving image bytes
+ * durably. Offloaded image occurrences become placeholder text parts;
+ * non-image, non-text blocks (files are projected away by the runtime before
+ * the adapter sees them) are dropped.
+ */
 async function serializeParts(
   blocks: readonly ContentBlock[],
   model: QwenLocalModel,
@@ -300,10 +362,14 @@ async function serializeParts(
       continue
     }
     if (block.type === 'image') {
+      if (block.offloaded === true) {
+        parts.push({ type: 'text', text: offloadedImageText(block.attachment) })
+        continue
+      }
       const requestImage = await resolveRequestImageBytes(
         attachments,
         block.attachment,
-        imagePolicy(model),
+        imageRequestTarget(block.attachment, imageRequestBudget(model)),
         signal,
       )
       const base64 = Buffer.from(requestImage.data).toString('base64')
@@ -311,9 +377,7 @@ async function serializeParts(
         type: 'image_url',
         image_url: { url: `data:${requestImage.mediaType};base64,${base64}` },
       })
-      continue
     }
-    // tool-result blocks are expanded by the caller, never nested here.
   }
   return parts
 }
@@ -326,7 +390,7 @@ async function serializeParts(
  * msg['reasoning_content'] = thinking`). Tool-call turns and
  * `preserveThinking: false` models send no reasoning.
  */
-function serializeAssistant(message: Message, model: QwenLocalModel): WireMessage {
+function serializeAssistant(message: Extract<RequestMessage, { role: 'assistant' }>, model: QwenLocalModel): WireMessage {
   assertNoImage(message.content, model, 'in assistant history')
   const text = flattenText(message.content)
   const reasoning = message.content
@@ -334,9 +398,9 @@ function serializeAssistant(message: Message, model: QwenLocalModel): WireMessag
     .map(block => block.text)
     .join('')
   const toolCalls = message.content
-    .filter(block => block.type === 'tool-call')
+    .filter((block): block is Extract<ContentBlock, { type: 'tool-call' }> => block.type === 'tool-call')
     .map(block => ({
-      id: block.id,
+      id: String(block.id),
       type: 'function' as const,
       function: { name: block.name, arguments: block.arguments },
     }))
@@ -353,18 +417,21 @@ function serializeAssistant(message: Message, model: QwenLocalModel): WireMessag
 }
 
 /**
- * Serialize the conversation. `tool-result` blocks become standalone
- * `{role: 'tool'}` messages; the harness puts each tool result in its own
- * user-role message, so a mixed user message contributes its text (and
- * image parts) first and its tool results as separate wire messages after.
+ * Serialize the conversation. `role: 'tool'` messages become standalone
+ * `role: 'tool'` wire entries; a mixed image inside one is split into a
+ * follow-up `role: 'user'` multimodal message for a multimodal model (see
+ * {@link splitToolResultImages}). `developer` messages are refused: this
+ * route declares no `toolUpdate`, so the runtime projects them away before
+ * the adapter ever sees one — a direct caller with one is out of contract.
  * @param messages - the harness conversation, in order.
  * @param model - the resolved model configuration (multimodal gate).
  * @param attachments - durable byte resolver, required whenever an image is present.
  * @param signal - cancellation for attachment reads.
  * @returns the wire messages; order preserved, each tool result expanded into its own entry.
+ * @throws LlmError `UNSUPPORTED_CONTENT` for a developer message or an image this model cannot carry.
  */
 export async function serializeMessages(
-  messages: readonly Message[],
+  messages: readonly RequestMessage[],
   model: QwenLocalModel,
   attachments: AttachmentStore | undefined,
   signal?: AbortSignal,
@@ -376,14 +443,43 @@ export async function serializeMessages(
       wire.push({ role: 'system', content: flattenText(message.content) })
       continue
     }
+    if (message.role === 'developer') {
+      // The reference adapter (dsh-llm-pi-ai) refuses these outright; this
+      // route's runtime path never forwards them (projectToolUpdates drops
+      // developer messages for routes without a toolUpdate mode).
+      throw new LlmError(
+        'qwen-local does not support developer messages (tool-change blocks)',
+        'UNSUPPORTED_CONTENT',
+      )
+    }
     if (message.role === 'assistant') {
       wire.push(serializeAssistant(message, model))
       continue
     }
-    // user role: tool results ride in user messages in the harness
-    // vocabulary, but the wire wants them as role:'tool' messages.
-    const toolResults = message.content.filter(block => block.type === 'tool-result')
-    const rest = message.content.filter(block => block.type !== 'tool-result')
+    if (message.role === 'tool') {
+      if (model.multimodal) {
+        // Strict-OpenAI placement: the image parts split into a follow-up
+        // user message, the tool message stays text-only. A text-only tool
+        // result needs no attachment service at all.
+        wire.push(...await splitToolResultImages(message, model, attachments, signal))
+      } else {
+        // Defense in depth for direct (non-runtime) use: the runtime
+        // projects images to text placeholders before a text-only adapter
+        // sees them, so this gate catches out-of-runtime histories only.
+        assertNoImage(message.content, model, 'inside tool results')
+        wire.push({
+          role: 'tool',
+          tool_call_id: String(message.toolCallId),
+          // Empty tool output still needs SOME content on the wire.
+          content: flattenText(message.content) || '(no output)',
+        })
+      }
+      continue
+    }
+    // user role (durable messages and identity-free RequestUserInput alike):
+    // 0.2.0 keeps tool results OUT of user content — the wire wants them as
+    // role:'tool' messages — so user content is plain text and image parts.
+    const rest = message.content
     const hasImage = rest.some(block => block.type === 'image')
     if (hasImage) {
       if (!model.multimodal) {
@@ -402,27 +498,8 @@ export async function serializeMessages(
       wire.push({ role: 'user', content: await serializeParts(rest, model, attachments, signal) })
     } else {
       const text = flattenText(rest)
-      if (text.length > 0 || toolResults.length === 0) {
+      if (text.length > 0) {
         wire.push({ role: 'user', content: text })
-      }
-    }
-    for (const result of toolResults) {
-      if (model.multimodal) {
-        // Strict-OpenAI placement: the image parts split into a follow-up
-        // user message, the tool message stays text-only. A text-only tool
-        // result needs no attachment service at all.
-        wire.push(...await splitToolResultImages(result, model, attachments, signal))
-      } else {
-        // Defense in depth for direct (non-runtime) use: the runtime
-        // projects images to text placeholders before a text-only adapter
-        // sees them, so this gate catches out-of-runtime histories only.
-        assertNoImage(result.content, model, 'inside tool results')
-        wire.push({
-          role: 'tool',
-          tool_call_id: result.toolCallId,
-          // Empty tool output still needs SOME content on the wire.
-          content: flattenText(result.content) || '(no output)',
-        })
       }
     }
   }

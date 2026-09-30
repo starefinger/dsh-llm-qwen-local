@@ -53,11 +53,18 @@ const modelSchema: z<QwenLocalModel> = z.object({
   reasoning: reasoningSchema,
 })
 
+// DSH >= 0.2.0: every route-level field is marked volatile — the settings
+// service exposes only volatile fields in its projected form, and the loader
+// hands volatile fields of the composition entry to `apply()` as live
+// references (see the frozen ENVELOPE comment in src/config.ts). `volatile`
+// is appended to each field's meta by schemastery, so the `.volatile()`
+// calls sit AFTER the constraint/default builders to keep the serialized
+// meta key order identical to the frozen envelope.
 export const Config: z<ConfigType> = z.object({
-  baseURL: z.string().default(DEFAULT_BASE_URL),
-  apiKeyEnv: z.string(),
-  models: z.array(modelSchema).default([]),
-  defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
-  maxTokens: z.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
-  streamIdleTimeoutMs: z.number().min(1).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+  baseURL: z.string().default(DEFAULT_BASE_URL).volatile(),
+  apiKeyEnv: z.string().volatile(),
+  models: z.array(modelSchema).default([]).volatile(),
+  defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW).volatile(),
+  maxTokens: z.number().step(1).min(1).default(DEFAULT_MAX_TOKENS).volatile(),
+  streamIdleTimeoutMs: z.number().min(1).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS).volatile(),
 })

@@ -20,10 +20,13 @@
  */
 
 // Type-only: the `z<T>` annotation below declares Config's public type as the
-// schemastery schema shape so the settings service's `installSection` accepts
-// it unchanged. `import type` is erased at build time (isolatedModules), so
-// the published plugin never loads @deepseek-ai/schemastery — the runtime
-// stand-in is the hand-owned callable + frozen envelope below.
+// schemastery schema shape. On DSH >= 0.2.0 the settings service walks the
+// exported `Config` as a live schemastery node (reading `.meta.volatile`,
+// `.type`, `.dict`, …) and rehydrates each volatile field through
+// `toJSON()`, so the runtime stand-in below spreads the dereferenced node
+// tree of the frozen envelope onto the callable. `import type` is erased at
+// build time (isolatedModules), so the published plugin never loads
+// @deepseek-ai/schemastery.
 import type z from '@deepseek-ai/schemastery'
 
 /** Default endpoint for a local vLLM instance. */
@@ -170,8 +173,23 @@ export interface Config {
 // renderer via schema.toJSON(); the Cordis loader validates the composition
 // entry via the ~standard surface below. Keep in sync if the Config shape
 // changes (regenerate with scripts/extract-envelope.mjs).
+//
+// DSH >= 0.2.0: each top-level field's `meta` also carries `volatile: true`.
+// The 0.2.0 settings service exposes only volatile fields of a plugin's
+// `Config` schema in its projected settings form, and the 0.2.0 loader hands
+// the volatile fields of the composition entry to `apply()` as live
+// references that the runtime updates in place when a settings write commits
+// (the 0.1.2 `settings.installSection` seam was removed — see src/index.ts).
+// Marking all six route fields volatile keeps every field editable from the
+// web settings page and every fact live per request.
+// Regenerated from scripts/envelope-source.ts (schemastery 3.18.4) via
+// scripts/dump-envelope.mjs — every builder call (including each `.volatile()`)
+// allocates one schema node, so the six route fields sit at uids 42/44/47/52/
+// 57/61 under root uid 62. Regenerate with `node scripts/dump-envelope.mjs`
+// and re-run `node scripts/extract-envelope.mjs --check` after any shape or
+// mark change.
 const ENVELOPE = {
-  uid: 56,
+  uid: 62,
   refs: {
     "1": {
       type: "string",
@@ -333,62 +351,138 @@ const ENVELOPE = {
         reasoning: 18
       }
     },
-    "41": {
-      type: "string",
-      meta: {
-        default: "http://127.0.0.1:8000/v1"
-      }
-    },
     "42": {
       type: "string",
-      meta: {}
+      meta: {
+        default: "http://127.0.0.1:8000/v1",
+        volatile: true
+      }
     },
     "44": {
+      type: "string",
+      meta: {
+        volatile: true
+      }
+    },
+    "47": {
       type: "array",
       meta: {
-        default: []
+        default: [],
+        volatile: true
       },
       inner: 39
-    },
-    "48": {
-      type: "number",
-      meta: {
-        step: 1,
-        min: 1,
-        default: 262144
-      }
     },
     "52": {
       type: "number",
       meta: {
         step: 1,
         min: 1,
-        default: 32768
+        default: 262144,
+        volatile: true
       }
     },
-    "55": {
+    "57": {
+      type: "number",
+      meta: {
+        step: 1,
+        min: 1,
+        default: 32768,
+        volatile: true
+      }
+    },
+    "61": {
       type: "number",
       meta: {
         min: 1,
-        default: 300000
+        default: 300000,
+        volatile: true
       }
     },
-    "56": {
+    "62": {
       type: "object",
       meta: {
         default: {}
       },
       dict: {
-        baseURL: 41,
-        apiKeyEnv: 42,
-        models: 44,
-        defaultContextWindow: 48,
-        maxTokens: 52,
-        streamIdleTimeoutMs: 55
+        baseURL: 42,
+        apiKeyEnv: 44,
+        models: 47,
+        defaultContextWindow: 52,
+        maxTokens: 57,
+        streamIdleTimeoutMs: 61
       }
     }
   }
 }
+
+// ── Dereferenced live-node view of the frozen envelope (DSH >= 0.2.0) ─────
+// The 0.2.0 settings service (dsh-settings' SettingsForms.describe / write)
+// treats a runtime `Config` as a LIVE schemastery schema node: it reads
+// `schema.meta.volatile`, `schema.type`, `schema.dict` and rehydrates each
+// volatile subtree with `new z(schema.toJSON())` using the HOST's own
+// schemastery. The 0.1.2 contract — a callable the service invoked and
+// registered through `installSection` — is gone, and a bare callable has no
+// `.meta`, so `describe()` threw `TypeError: Cannot read properties of
+// undefined (reading 'volatile')`, failed every `settings/describe` RPC, and
+// aborted the desktop cold-start welcome.
+//
+// Each dereferenced node below carries the original ref's `type`/`meta`
+// (including the volatile marks) and its children — `dict`, `inner`,
+// `list` — already dereferenced, mirroring how schemastery materializes a
+// schema from its envelope, and a `toJSON()` answering the sub-envelope
+// reachable from that node, so the settings service can rebuild any volatile
+// field with its own schemastery. The Cordis loader is unaffected: it only
+// reads the `~standard` surface, which funnels through `resolveConfig`.
+type EnvelopeRef = {
+  type: string
+  meta: Record<string, unknown>
+  value?: unknown
+  dict?: Record<string, number>
+  inner?: number
+  list?: number[]
+}
+type NodeChild = { type: string; meta: Record<string, unknown> } & Partial<Record<'value' | 'dict' | 'inner' | 'list', unknown>>
+type NodeTree = NodeChild & { toJSON: () => { uid: number; refs: Record<string, EnvelopeRef> } }
+
+/** The sub-envelope reachable from one ref (itself plus every nested child). */
+function subEnvelope(envelope: { uid: number; refs: Record<string, EnvelopeRef> }, rootRef: number): { uid: number; refs: Record<string, EnvelopeRef> } {
+  const reachable = new Set<number>()
+  const visit = (ref: number): void => {
+    if (reachable.has(ref)) return
+    reachable.add(ref)
+    const node = envelope.refs[String(ref)]
+    if (node === undefined) return
+    const children: number[] = []
+    if (node.dict !== undefined) children.push(...Object.values(node.dict))
+    if (node.inner !== undefined) children.push(node.inner)
+    if (node.list !== undefined) children.push(...node.list)
+    for (const child of children) visit(child)
+  }
+  visit(rootRef)
+  const refs: Record<string, EnvelopeRef> = {}
+  for (const ref of reachable) {
+    const node = envelope.refs[String(ref)]
+    if (node !== undefined) refs[String(ref)] = node
+  }
+  return { uid: rootRef, refs }
+}
+
+/** Dereference one ref into a live node, recursively, with a `toJSON()`. */
+function derefNode(envelope: { uid: number; refs: Record<string, EnvelopeRef> }, ref: number): NodeTree {
+  const node = envelope.refs[String(ref)]
+  if (node === undefined) throw new Error(`dsh-llm-qwen-local: missing envelope ref ${ref}`)
+  const out: NodeChild = { type: node.type, meta: { ...node.meta } }
+  if (node.value !== undefined) out.value = node.value
+  if (node.dict !== undefined) {
+    out.dict = Object.fromEntries(Object.entries(node.dict).map(([key, childRef]) => [key, derefNode(envelope, childRef)]))
+  }
+  if (node.inner !== undefined) out.inner = derefNode(envelope, node.inner)
+  if (node.list !== undefined) out.list = node.list.map((childRef) => derefNode(envelope, childRef))
+  return Object.assign(out, { toJSON: () => subEnvelope(envelope, ref) })
+}
+
+/** The dereferenced view of the whole envelope, rooted at the Config object. */
+const NODE_TREE: NodeTree = derefNode(ENVELOPE, ENVELOPE.uid)
 
 /**
  * Standard-schema v1 surface the Cordis loader applies to the composition
@@ -412,24 +506,23 @@ const CONFIG_STANDARD = {
 }
 
 /**
- * The configuration surface the plugin exposes to its two consumers: the
- * settings service (invokes it as `schema(mergedValue)` and reads
- * `schema.toJSON()`) and the Cordis loader (reads
- * `Config["~standard"].validate`). The callable IS the explicit resolve step,
- * and `toJSON()` answers the frozen envelope for the web form renderer.
+ * The configuration surface the plugin exposes to its consumers: the Cordis
+ * loader (reads `Config["~standard"].validate`) and, on DSH >= 0.2.0, the
+ * settings service (walks it as a live schemastery node — `.meta.volatile`,
+ * `.type`, `.dict` — and rehydrates volatile subtrees via `toJSON()`).
  *
- * Owning the callable and the envelope as hand-written facts (instead of a
- * live schemastery instance) is what lets the published plugin drop the
- * schemastery dependency entirely. The public type is still the schemastery
- * schema shape (`z<Config>`) so the settings service's `installSection`
- * accepts it unchanged and the exported surface is byte-compatible with the
- * original; the runtime stand-in is cast to that type because the only
- * members the harness actually touches — the call signature, `toJSON()`, and
- * `["~standard"]` — are all implemented here, and no harness code path
- * reaches the remaining schemastery-only members.
+ * The callable is the explicit resolve step (loader validation funnels
+ * through it); the dereferenced node tree built above is spread onto it so
+ * the 0.2.0 node-walking contract is served by the same hand-owned facts;
+ * and `toJSON()` answers the full frozen envelope for the web form renderer.
+ * The public type is the schemastery schema shape (`z<Config>`); the runtime
+ * stand-in is cast to it because every member a harness code path touches —
+ * the call signature, the node-tree members, `toJSON()`, and `["~standard"]`
+ * — is implemented here.
  */
 export const Config: z<Config> = Object.assign(
   (config: Config): QwenLocalOptions => resolveConfig(config),
+  NODE_TREE,
   {
     toJSON: () => ENVELOPE,
     '~standard': CONFIG_STANDARD,

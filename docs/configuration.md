@@ -2,7 +2,7 @@
 
 [← Back to README](../README.md) · [Design notes](design.md)
 
-Every configuration field for `dsh-llm-qwen-local`. The configuration lives in the `llm-qwen-local` settings section (editable on the **Settings → Qwen 本地 (vLLM)** page, or in `cordis.patch.yml` by `id: llm-qwen-local`).
+Every configuration field for `dsh-llm-qwen-local`. The configuration lives in the `llm-qwen-local` settings section (editable on the **Plugins → dsh-llm-qwen-local** detail page, where the form is rendered inline, or in `cordis.patch.yml` by `id: llm-qwen-local`).
 
 ## Route-level fields
 
@@ -12,7 +12,7 @@ All fields are optional in `cordis.yml`; schema defaults fill the rest.
 |---|---|---|
 | `baseURL` | `http://127.0.0.1:8000/v1` | Endpoint base; `/chat/completions` is appended. |
 | `apiKeyEnv` | — (no auth header) | Environment-variable name holding an optional bearer token, read per request. Absent/unset/blank = no `Authorization` header. |
-| `models` | `[]` | Model entries. Empty (or absent) = the route stays mounted but dormant — no selectable models — and the settings page can re-populate it (discover or manual add). |
+| `models` | `[]` | Model entries. Empty (or absent) = the route stays mounted but dormant — no selectable models — and the configuration page can re-populate it (discover or manual add). |
 | `defaultContextWindow` | `262144` | Context capacity used when a model has no exact value. |
 | `maxTokens` | `32768` | Per-request output cap fallback; explicit request values and a model's own cap win. |
 | `streamIdleTimeoutMs` | `300000` | Maximum provider idle time while one stream read is outstanding. |

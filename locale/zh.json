@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Qwen 本地部署 (vLLM)",
+    "description": "本地部署 Qwen 模型的 LLM 适配器（vLLM OpenAI 兼容端点）。"
+  }
+}

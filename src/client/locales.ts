@@ -1,6 +1,6 @@
 /**
- * zh/en copy for the Qwen (local) settings page. Registered into the DSH
- * locale registry under {@link LOCALE_NS}; the host-backed language
+ * zh/en copy for the Qwen (local) configuration page. Registered into the
+ * DSH locale registry under {@link LOCALE_NS}; the host-backed language
  * preference wins and switches live.
  */
 
@@ -8,12 +8,9 @@
 export const LOCALE_NS = 'dsh-llm-qwen-local'
 
 export const zh = {
-  nav: 'Qwen 本地 (vLLM)',
-  title: 'Qwen 本地部署 (vLLM)',
-  subtitle: '端点、模型目录与推理档位。保存后立即生效。',
   loading: '正在加载配置…',
-  loadError: '无法加载设置节：{detail}',
-  notMounted: '宿主未挂载 llm-qwen-local 设置节——请确认服务端插件已加载且 settings 服务可用。',
+  unavailable: '该插件当前未加载，暂时无法配置。',
+  readOnly: '本部署的设置为只读，无法保存更改。',
   endpoint: '端点',
   endpointPlaceholder: 'http://127.0.0.1:8000/v1（自动追加 /chat/completions）',
   keyInput: 'API Key',
@@ -43,17 +40,16 @@ export const zh = {
   removeReasoning: '移除',
   effortId: '档位 id',
   effortName: '显示名',
-  effortWire: 'wire 值',
+  effortWire: '请求值',
   effortNamePlaceholder: '留空 = 显示 id',
-  effortWirePlaceholder: 'off 档填 none；旧版 vLLM 留空',
-  effortRow: '档位',
+  effortWirePlaceholder: 'off 档填 none；旧版留空',
   addEffort: '添加档位',
   removeEffort: '移除',
   defaultEffort: '默认档位',
   defaultEffortUnset: '（跟随部署默认）',
-  offMode: 'off 表达方式',
+  offMode: 'off 档附加参数',
   offModeKwargs: 'enable_thinking: false',
-  offModeOmit: '省略参数',
+  offModeOmit: '无',
   discover: '从端点发现模型',
   discovering: '正在探测 /models…',
   discoverOk: '发现 {count} 个模型（新增 {added}，保留 {kept}）。',
@@ -63,16 +59,13 @@ export const zh = {
   saving: '保存中…',
   saved: '已保存。',
   saveError: '保存被拒绝：{detail}',
-  invalid: '当前草稿与 schema 不一致，保存前请检查标红字段。',
+  saveRefused: '保存未被接受——页面已重新加载最新状态，请检查后重试。',
 } as const
 
 export const en = {
-  nav: 'Qwen local (vLLM)',
-  title: 'Qwen local deployment (vLLM)',
-  subtitle: 'Endpoint, model catalog, and reasoning levels. Saves apply live.',
   loading: 'Loading configuration…',
-  loadError: 'Could not load the settings section: {detail}',
-  notMounted: 'The llm-qwen-local settings section is not mounted — check that the server plugin is loaded and the settings service is available.',
+  unavailable: 'This plugin is not loaded, so it cannot be configured right now.',
+  readOnly: 'This deployment stores settings read-only; changes cannot be saved.',
   endpoint: 'Endpoint',
   endpointPlaceholder: 'http://127.0.0.1:8000/v1 (appends /chat/completions)',
   keyInput: 'API Key',
@@ -102,17 +95,16 @@ export const en = {
   removeReasoning: 'Remove',
   effortId: 'Level id',
   effortName: 'Display name',
-  effortWire: 'Wire value',
+  effortWire: 'Request value',
   effortNamePlaceholder: 'blank = show id',
-  effortWirePlaceholder: 'off: none; blank for pre-parameter vLLM',
-  effortRow: 'Level',
+  effortWirePlaceholder: 'off: none; blank on older vLLM',
   addEffort: 'Add level',
   removeEffort: 'Remove',
   defaultEffort: 'Default level',
   defaultEffortUnset: '(follow deployment default)',
-  offMode: 'How off is expressed',
+  offMode: 'Extra parameter for the off level',
   offModeKwargs: 'enable_thinking: false',
-  offModeOmit: 'omit the parameter',
+  offModeOmit: 'none',
   discover: 'Discover models from endpoint',
   discovering: 'Probing /models…',
   discoverOk: 'Discovered {count} models ({added} added, {kept} kept).',
@@ -122,7 +114,7 @@ export const en = {
   saving: 'Saving…',
   saved: 'Saved.',
   saveError: 'Save refused: {detail}',
-  invalid: 'The draft does not match the schema — check the flagged fields before saving.',
+  saveRefused: 'Save not accepted — the latest state was reloaded; check the fields and try again.',
 } as const
 
 export type LocaleKey = keyof typeof zh

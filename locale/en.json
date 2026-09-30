@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Qwen local (vLLM)",
+    "description": "LLM adapter for locally deployed Qwen models served by a vLLM OpenAI-compatible endpoint."
+  }
+}

@@ -14,12 +14,15 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 
 /**
- * True when typed model content contains an image block, walking nested
- * tool-result content.
+ * True when typed model content contains an image block.
+ *
+ * The 0.2.0 block vocabulary is flat — tool results are first-class
+ * `role: 'tool'` messages, not nested content blocks — so the walk is a
+ * single `some()`. (The 0.1.2 copy also recursed into `tool-result` blocks,
+ * which no longer exist in `ContentBlockMap`.)
  * @param content - typed model content blocks.
- * @returns whether any nested block is an image.
+ * @returns whether any block is an image.
  */
 export function contentHasImage(content: readonly ContentBlock[]): boolean {
-  return content.some(block => block.type === 'image'
-    || (block.type === 'tool-result' && contentHasImage(block.content)))
+  return content.some(block => block.type === 'image')
 }

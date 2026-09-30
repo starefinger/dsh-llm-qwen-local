@@ -19,7 +19,7 @@ import type {
   AttachmentStore,
   ImageAttachmentRef,
   ImageMediaType,
-  ImageRequestPolicy,
+  ImageRequestTarget,
   RequestImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
 import { DEFAULT_IMAGE_MAX_BYTES, DEFAULT_IMAGE_MAX_PIXELS } from '../src/config.js'
@@ -70,7 +70,7 @@ function fakeStore(bytes = new Uint8Array([1, 2, 3]), mediaType: ImageMediaType 
   }
 }
 
-function imageMessage(attachmentId = 'att-1', bytes = 3): Message {
+function imageMessage(attachmentId = 'att-1', bytes = 3, width = 1, height = 1): Message {
   return createUserMessage({
     content: [
       { type: 'text', text: 'what is in this image?' },
@@ -80,8 +80,8 @@ function imageMessage(attachmentId = 'att-1', bytes = 3): Message {
           attachmentId: AttachmentId(attachmentId),
           mediaType: 'image/png',
           bytes,
-          width: 1,
-          height: 1,
+          width,
+          height,
         },
       },
     ],
@@ -93,11 +93,11 @@ function imageMessage(attachmentId = 'att-1', bytes = 3): Message {
 function projectingStore(
   data = new Uint8Array([9, 8, 7]),
   mediaType: ImageMediaType = 'image/jpeg',
-): { store: AttachmentStore; calls: { ref: ImageAttachmentRef; policy: ImageRequestPolicy }[] } {
-  const calls: { ref: ImageAttachmentRef; policy: ImageRequestPolicy }[] = []
+): { store: AttachmentStore; calls: { ref: ImageAttachmentRef; target: ImageRequestTarget }[] } {
+  const calls: { ref: ImageAttachmentRef; target: ImageRequestTarget }[] = []
   const store = {
-    readImageRequest: async (ref: ImageAttachmentRef, policy: ImageRequestPolicy): Promise<RequestImageAttachment> => {
-      calls.push({ ref, policy })
+    readImageRequest: async (ref: ImageAttachmentRef, target: ImageRequestTarget): Promise<RequestImageAttachment> => {
+      calls.push({ ref, target })
       return {
         variantId: ImageVariantId('variant-1'),
         attachment: ref,
@@ -595,8 +595,8 @@ describe('serializeRequest: pass-through fields', () => {
   })
 })
 
-describe('serializeRequest: request-image pipeline (0.1.1-rc.2)', () => {
-  it('projects through readImageRequest when the provider implements it, with the default policy', async () => {
+describe('serializeRequest: request-image pipeline (0.2.0 target)', () => {
+  it('projects through readImageRequest when the provider implements it, with the default target', async () => {
     const { store, calls } = projectingStore()
     const body = await serializeRequest(
       options({ model: 'qwen3.8-vl', messages: [imageMessage()] }),
@@ -614,13 +614,35 @@ describe('serializeRequest: request-image pipeline (0.1.1-rc.2)', () => {
     ])
     expect(calls).toHaveLength(1)
     expect(calls[0]?.ref.attachmentId).toBe(AttachmentId('att-1'))
-    expect(calls[0]?.policy).toEqual({
-      maxPixels: DEFAULT_IMAGE_MAX_PIXELS,
+    // The 0.2.0 target is the exact per-image box: the default pixel budget
+    // applied to the image's 1x1 intrinsic size (never enlarged) plus the
+    // default encoded-byte cap.
+    expect(calls[0]?.target).toEqual({
+      width: 1,
+      height: 1,
       maxBytes: DEFAULT_IMAGE_MAX_BYTES,
     })
   })
 
-  it('passes per-model image budgets to the projection policy', async () => {
+  it('derives the target box from the model pixel budget (aspect-preserving, never enlarged)', async () => {
+    const { store, calls } = projectingStore()
+    const model: QwenLocalModel = {
+      id: 'qwen3.8-vl',
+      multimodal: true,
+      imageMaxPixels: 123_456,
+      imageMaxBytes: 2048,
+    }
+    // A 1000x800 source under a 123_456-pixel budget downscales to
+    // 392x314 (scale ~0.393, aspect preserved, product under the cap).
+    await serializeRequest(
+      options({ model: 'qwen3.8-vl', messages: [imageMessage('att-big', 3, 1000, 800)] }),
+      model,
+      store,
+    )
+    expect(calls[0]?.target).toEqual({ width: 392, height: 314, maxBytes: 2048 })
+  })
+
+  it('keeps a small image at its intrinsic size (never enlarged)', async () => {
     const { store, calls } = projectingStore()
     const model: QwenLocalModel = {
       id: 'qwen3.8-vl',
@@ -633,7 +655,9 @@ describe('serializeRequest: request-image pipeline (0.1.1-rc.2)', () => {
       model,
       store,
     )
-    expect(calls[0]?.policy).toEqual({ maxPixels: 123_456, maxBytes: 2048 })
+    // The 1x1 test image cannot exceed a 123_456-pixel budget — the target
+    // keeps its intrinsic size (never enlarged).
+    expect(calls[0]?.target).toEqual({ width: 1, height: 1, maxBytes: 2048 })
   })
 
   it('falls back to readImage when the provider refuses projection', async () => {

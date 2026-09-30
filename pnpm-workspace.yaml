@@ -1,18 +1,8 @@
 allowBuilds:
   esbuild: true
-minimumReleaseAgeExclude:
-  - '@deepseek-ai/dsh-attachment@0.1.2-rc.1'
-  - '@deepseek-ai/dsh-brand@0.1.2-rc.1'
-  - '@deepseek-ai/dsh-invariants@0.1.2-rc.1'
-  - '@deepseek-ai/dsh-llm@0.1.2-rc.1'
-  - '@deepseek-ai/dsh-timeout@0.1.2-rc.1'
-  - '@deepseek-ai/dsh-settings@0.1.2-rc.1'
-  - '@deepseek-ai/dsh-launch-environment@0.1.2-rc.1'
-  - '@deepseek-ai/dsh-api-remotes@0.1.2-rc.1'
-  - '@deepseek-ai/dsh-api-gateway@0.1.2-rc.1'
-  - '@deepseek-ai/dsh-credentials@0.1.2-rc.1'
-  - '@deepseek-ai/dsh-client-connection@0.1.2-rc.1'
-  - '@deepseek-ai/dsh-client-locale@0.1.2-rc.1'
-  - '@deepseek-ai/dsh-client-ui-settings@0.1.2-rc.1'
-  - '@deepseek-ai/dsh-typert-protocol@0.1.2-rc.1'
-  - '@deepseek-ai/dsh-typert-registry@0.1.2-rc.1'
+# This port pins the DSH 0.2.0-rc.2 line in its devDependencies, which lands
+# on the registry within pnpm's default 24h minimum-release-age window. The
+# age gate is disabled here so a fresh release wave does not break
+# `pnpm install` for this compatibility target. (The 0.1.2-rc.1 exclusion
+# list that previously served the same purpose was removed along with it.)
+minimumReleaseAge: 0

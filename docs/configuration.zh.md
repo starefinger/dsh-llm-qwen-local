@@ -2,7 +2,7 @@
 
 [← 返回 README](../README.zh.md) · [设计思路](design.zh.md)
 
-`dsh-llm-qwen-local` 的每个配置字段。配置位于 `llm-qwen-local` 设置节(可在 **设置 → Qwen 本地 (vLLM)** 页面编辑,或在 `cordis.patch.yml` 中按 `id: llm-qwen-local` 覆盖)。
+`dsh-llm-qwen-local` 的每个配置字段。配置位于 `llm-qwen-local` 设置节(可在 **Plugins → dsh-llm-qwen-local** 详情页的内联配置表单编辑,或在 `cordis.patch.yml` 中按 `id: llm-qwen-local` 覆盖)。
 
 ## 路由级字段
 
@@ -12,7 +12,7 @@
 |---|---|---|
 | `baseURL` | `http://127.0.0.1:8000/v1` | 端点基址;自动追加 `/chat/completions`。 |
 | `apiKeyEnv` | —(不发送认证头) | 持有可选 bearer token 的环境变量名,每请求读取。缺省/未设置/空白 = 不发送 `Authorization` 头。 |
-| `models` | `[]` | 模型条目。空(或缺省)= 路由保持挂载但休眠——无可选模型——设置页可随时重新填充(从端点发现或手动添加)。 |
+| `models` | `[]` | 模型条目。空(或缺省)= 路由保持挂载但休眠——无可选模型——配置页可随时重新填充(从端点发现或手动添加)。 |
 | `defaultContextWindow` | `262144` | 模型没有精确值时使用的上下文容量。 |
 | `maxTokens` | `32768` | 每请求输出上限的兜底值;请求显式值与模型自身上限优先。 |
 | `streamIdleTimeoutMs` | `300000` | 一次流读取挂起期间允许的最大提供方空闲时间。 |

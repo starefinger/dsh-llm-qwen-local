@@ -1,20 +1,32 @@
 /**
- * The Qwen (local, vLLM) settings page: one form over the plugin's
- * `llm-qwen-local` settings section. The host owns the section through the
- * settings seam; this surface reads the resolved value, edits a local draft,
- * and saves it back with `settings.replace` (the seam validates against the
- * schema and answers a redacted view). The API key follows the core Models
- * page convention: the value never enters the settings section — it is
- * written to the durable credentials service under the provider's derived
- * ref (`QWEN_LOCAL_API_KEY`), and the section's `apiKeyEnv` field records
- * that ref name for the adapter's resolver. Model discovery probes the
- * draft's endpoint through `llm.discoverModels` and merges the ids into the
- * draft. The form also edits the request-image budgets introduced by the
- * 0.1.1-rc.2 harness upgrade: the per-model pixel/byte projection budgets.
- * There is no route-level total image cap in this plugin — every image is
- * inlined once it fits its per-image budget, and a request too large for the
- * endpoint is the endpoint's to refuse (the backend LLM service's own input
- * limits apply).
+ * The Qwen (local, vLLM) configuration page: one form over the plugin's
+ * `llm-qwen-local` settings namespace. On DSH 0.2.0 the settings service
+ * projects the plugin's volatile `Config` into that namespace and commits
+ * writes through the profile's Cordis patch, so this page — mounted on the
+ * Web sidebar's **Plugins** page through the `plugins.bundle.config` slot
+ * (keyed by the bundle's package name, `dsh-llm-qwen-local`) and rendered
+ * inline on the bundle's detail page — edits the same document the host
+ * resolves per request. The shared
+ * `ConfigForm` scope (from the settings domain's `configForms` service) owns
+ * the staged read (schema-resolved value + revision fence), the ordered write
+ * queue, and the recovery reload after a refused write; the page renders the
+ * snapshot, edits a local draft, and commits it as one atomic section-root
+ * `set` operation.
+ *
+ * The page renders only the form body — the bundle detail page's built-in
+ * chrome (the bundle's `locale/*.json` metadata, falling back to the
+ * manifest) owns the title and description, so there is no second header (the
+ * official companions follow the same pattern). The API key follows the core
+ * Models page convention: the value never enters the settings section — it is
+ * written to the durable credentials service under the provider's derived ref
+ * (`QWEN_LOCAL_API_KEY`), and the section's `apiKeyEnv` field records that ref
+ * name for the adapter's resolver. Model discovery probes the draft's endpoint
+ * through `llm.discoverModels` and merges the ids into the draft. The form
+ * also edits the request-image budgets introduced by the 0.1.1-rc.2 harness
+ * upgrade: the per-model pixel/byte projection budgets. There is no route-level
+ * total image cap in this plugin — every image is inlined once it fits its
+ * per-image budget, and a request too large for the endpoint is the endpoint's
+ * to refuse (the backend LLM service's own input limits apply).
  *
  * Row identity: model and effort rows carry a stable `key` assigned when the
  * row is created or discovered, so the React row — and its inputs — keep
@@ -26,12 +38,23 @@
  * the page carries its own minimal rules.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Button, Checkbox, Input, SegmentedControl } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { LlmModelDiscoveryRequest } from '@deepseek-ai/dsh-api-remotes/client'
+import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { QwenLocalOperations } from './operations.ts'
 import type { LocaleKey } from './locales.ts'
 
 /** The settings namespace this page edits (mirrors the node-side NS). */
 export const SECTION_NS = 'llm-qwen-local'
+
+/**
+ * The `plugins.bundle.config` key: the bundle's package name. The
+ * plugin-manager page renders the keyed face inline on the bundle's detail
+ * page (the same surface the official single-config bundles use), so the key
+ * is the package name — not a per-row id.
+ */
+export const BUNDLE_CONFIG_KEY = 'dsh-llm-qwen-local'
 
 /** The provider route this section configures (for discovery). */
 export const PROVIDER_ROUTE = 'qwen-local'
@@ -86,7 +109,10 @@ interface ModelDraft {
 }
 
 interface PageState {
-  revision: number
+  /** Revision the draft was read at; fences the next write. */
+  revision: number | undefined
+  /** Whether the Host document accepts writes (memory mode never does). */
+  writable: boolean
   draft: ModelDraft[]
   baseURL: string
   /** The loaded section's `apiKeyEnv` value (a ref or env-var name). */
@@ -97,45 +123,76 @@ interface PageState {
 
 type T = (key: LocaleKey, vars?: Record<string, string | number>) => string
 
+/**
+ * Layout-only styles. Every color, border, and radius comes from the host
+ * theme (`--dsw-alias-*` / `--dsw-radius-*` tokens), and every interactive
+ * control is a shared `@deepseek-ai/dsh-client-ui-primitives` component —
+ * so the page renders with the same inputs, buttons, checkboxes, and
+ * segmented controls the rest of the app uses. The vertical rhythm
+ * (12px field padding, hairline separators, 13px/500 primary labels, 16px
+ * footer) mirrors the host's own `SettingsForm` (fields.module.css), so the
+ * card reads as one more settings section instead of a foreign form.
+ */
 const css = {
   page: {
-    display: 'flex', flexDirection: 'column' as const, gap: 16,
-    maxWidth: 720, padding: '8px 0', fontFamily: 'inherit',
+    display: 'flex', flexDirection: 'column' as const,
+    maxWidth: 720, fontFamily: 'inherit',
   },
-  h1: { margin: 0, fontSize: 16, fontWeight: 600 },
-  sub: { margin: 0, fontSize: 12, opacity: 0.7 },
-  field: { display: 'flex', flexDirection: 'column' as const, gap: 4 },
-  label: { fontSize: 12, opacity: 0.8 },
-  input: {
-    boxSizing: 'border-box', width: '100%', padding: '6px 8px',
-    fontSize: 13, fontFamily: 'inherit',
-    background: 'rgba(127,127,127,0.08)', color: 'inherit',
-    border: '1px solid rgba(127,127,127,0.35)', borderRadius: 6,
+  /** Top-level form field, metric-matched to the host SettingsForm. */
+  field: {
+    display: 'flex', flexDirection: 'column' as const, gap: 6,
+    padding: '12px 0', flex: '0 1 auto',
+  },
+  hairline: { borderTop: '0.5px solid var(--dsw-alias-border-l2)' },
+  /** Compact label+control column used inside the model cards and effort rows. */
+  subField: { display: 'flex', flexDirection: 'column' as const, gap: 4, flex: '0 1 auto' },
+  label: {
+    fontSize: 13, fontWeight: 500, lineHeight: 1.5,
+    color: 'var(--dsw-alias-label-primary)',
   },
   row: { display: 'flex', gap: 8, flexWrap: 'wrap' as const, alignItems: 'center' },
+  /** Effort-table columns. Header and data rows share the same tracks (and the
+   * same 68px trailing action slot), so the columns line up exactly; the column
+   * is a flex column, so the input stretches to fill it like the model fields. */
+  effortColId: { display: 'flex', flexDirection: 'column' as const, minWidth: 0, flex: '1 1 110px' },
+  effortColName: { display: 'flex', flexDirection: 'column' as const, minWidth: 0, flex: '1.5 1 140px' },
+  effortColWire: { display: 'flex', flexDirection: 'column' as const, minWidth: 0, flex: '1 1 110px' },
+  /** Empty header slot, the width of a row remove button. */
+  effortActionSlot: { flex: '0 0 68px' },
   card: {
-    border: '1px solid rgba(127,127,127,0.35)', borderRadius: 8,
-    padding: 12, display: 'flex', flexDirection: 'column' as const, gap: 8,
+    border: '1px solid var(--dsw-alias-border-l1)',
+    borderRadius: 'var(--dsw-radius-md)',
+    background: 'var(--dsw-alias-bg-layer-1)',
+    padding: 12, display: 'flex', flexDirection: 'column' as const, gap: 12,
   },
   cardHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  cardTitle: { fontSize: 13, fontWeight: 600, fontFamily: 'ui-monospace, Menlo, monospace' },
-  button: {
-    padding: '5px 10px', fontSize: 12, fontFamily: 'inherit', cursor: 'pointer',
-    background: 'rgba(127,127,127,0.12)', color: 'inherit',
-    border: '1px solid rgba(127,127,127,0.35)', borderRadius: 6,
+  cardTitle: {
+    fontSize: 13, fontWeight: 600,
+    fontFamily: 'ui-monospace, Menlo, monospace',
+    color: 'var(--dsw-alias-label-primary)',
   },
-  primary: {
-    padding: '6px 14px', fontSize: 13, fontFamily: 'inherit', cursor: 'pointer',
-    background: 'rgba(90,140,255,0.22)', color: 'inherit',
-    border: '1px solid rgba(90,140,255,0.55)', borderRadius: 6,
+  /** Action row, metric-matched to the host SettingsForm footer. */
+  footer: { display: 'flex', gap: 8, flexWrap: 'wrap' as const, alignItems: 'center', paddingTop: 16 },
+  /** Inline notes that sit inside a field (key status, "no reasoning" row). */
+  noteWarn: { margin: 0, fontSize: 12, lineHeight: 1.5, color: 'var(--dsw-alias-state-warn-primary)' },
+  noteMuted: { margin: 0, fontSize: 12, lineHeight: 1.5, color: 'var(--dsw-alias-label-secondary)' },
+  /** Standalone status paragraphs below the footer. */
+  msgError: { margin: '8px 0 0', fontSize: 12, lineHeight: 1.5, color: 'var(--dsw-alias-state-error-primary)' },
+  msgStatus: { margin: '8px 0 0', fontSize: 12, lineHeight: 1.5, color: 'var(--dsw-alias-label-secondary)' },
+  msgMuted: { margin: '8px 0 0', fontSize: 12, lineHeight: 1.5, color: 'var(--dsw-alias-label-secondary)' },
+  ok: { margin: 0, fontSize: 12, lineHeight: 1.5, color: 'var(--dsw-alias-state-success-primary)' },
+  banner: { margin: '0 0 12px', fontSize: 12, lineHeight: 1.5, color: 'var(--dsw-alias-state-warn-primary)' },
+  checks: { display: 'flex', gap: 16 },
+  /** Theme-tinted native select; the host primitives expose no Select yet. */
+  select: {
+    boxSizing: 'border-box', height: 32, padding: '0 8px',
+    fontSize: 14, fontFamily: 'inherit', lineHeight: '22px',
+    color: 'var(--dsw-alias-label-primary)',
+    background: 'var(--dsw-alias-bg-layer-1)',
+    border: '0.5px solid var(--dsw-alias-border-l4)',
+    borderRadius: 'var(--dsw-radius-md)',
   },
-  danger: { opacity: 0.75 },
-  status: { fontSize: 12 },
-  error: { fontSize: 12, color: '#f2a1a1' },
-  ok: { fontSize: 12, color: '#a1f2b1' },
-  warn: { fontSize: 12, color: '#f2d9a1' },
-  muted: { fontSize: 12, opacity: 0.6 },
-  checks: { display: 'flex', gap: 16, fontSize: 12 },
+  divider: { borderTop: '0.5px solid var(--dsw-alias-border-l2)', paddingTop: 8 },
 } as const
 
 /** Read one field of a raw JSON record, tolerating absence and wrong types. */
@@ -187,12 +244,13 @@ function toModels(raw: unknown): ModelDraft[] {
   })
 }
 
-/** Parse the resolved section value into page state, segregating passthrough. */
-function parsePage(value: unknown, revision: number): PageState {
+/** Parse the scope's schema-resolved section into page state, segregating passthrough. */
+function parsePage(value: unknown, revision: number | undefined, writable: boolean): PageState {
   const record = field(value)
   const { baseURL: _baseURL, apiKeyEnv: _apiKeyEnv, models: _models, ...rest } = record
   return {
     revision,
+    writable,
     baseURL: stringField(record.baseURL),
     apiKeyEnv: stringField(record.apiKeyEnv),
     draft: toModels(record.models),
@@ -237,9 +295,9 @@ function wireModel(model: ModelDraft): Record<string, unknown> {
 type KeyMode = 'new' | 'clear' | 'keep'
 
 /**
- * Serialize the draft into the section value for `settings.replace`. The
- * `apiKeyEnv` the section carries: the managed ref after a key store, absent
- * after a clear, the loaded value untouched otherwise.
+ * Serialize the draft into the section value for the section-root `set` op.
+ * The `apiKeyEnv` the section carries: the managed ref after a key store,
+ * absent after a clear, the loaded value untouched otherwise.
  */
 function wireSection(state: PageState, keyMode: KeyMode): Record<string, unknown> {
   const section: Record<string, unknown> = { ...state.passthrough }
@@ -252,29 +310,37 @@ function wireSection(state: PageState, keyMode: KeyMode): Record<string, unknown
   return section
 }
 
-export interface QwenLocalSectionProps {
-  /** Close the settings panel (the shell owns the open state). */
-  close: () => void
-  /** The bound Host operations (settings/credentials/llm remote namespaces). */
-  operations: QwenLocalOperations
-  /** The settings namespace this page edits. */
-  sectionNs: string
-  /** The pushed-invalidation channel (settings/credentials document commits). */
-  remote: RemoteEvents
-  /** Registrant-localized translate. */
-  t: T
-}
-
 /** The pushed-invalidation channel the page listens on (structural subset). */
 export interface RemoteEvents {
   $on(event: string, handler: (...args: unknown[]) => void): () => void
 }
 
-/** The Qwen (local) settings page body. */
-export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocalSectionProps): JSX.Element {
+export interface QwenLocalConfigPageProps {
+  /** The view the Plugins page renders (the detail page renders `page`). */
+  view: string
+  /** The shared settings scope for the `llm-qwen-local` namespace. */
+  scope: ConfigForm<unknown>
+  /** The bound Host operations (credentials + llm discovery remotes). */
+  operations: QwenLocalOperations
+  /** The pushed-invalidation channel (credentials document commits). */
+  remote: RemoteEvents
+  /** Registrant-localized translate. */
+  t: T
+}
+
+/**
+ * The Qwen (local) configuration page. The Plugins page renders it inline on
+ * the bundle's detail page (`plugins.bundle.config`, `view: "page"`), so the
+ * page is the full form — the detail page's built-in chrome owns the header.
+ */
+export function QwenLocalConfigPage(page: QwenLocalConfigPageProps): JSX.Element {
+  return <QwenLocalPageBody scope={page.scope} operations={page.operations} remote={page.remote} t={page.t} />
+}
+
+/** The full configuration form, staged over the shared settings scope. */
+function QwenLocalPageBody({ scope, operations, remote, t }: Omit<QwenLocalConfigPageProps, 'view'>): JSX.Element {
+  const [snap, setSnap] = useState(() => scope.getSnapshot())
   const [page, setPage] = useState<PageState | undefined>()
-  const [loadError, setLoadError] = useState<string | undefined>()
-  const [missing, setMissing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState<string | undefined>()
@@ -282,53 +348,31 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
   const [discoverNote, setDiscoverNote] = useState<string | undefined>()
   const [discoverError, setDiscoverError] = useState<string | undefined>()
   // API key: the value only crosses the wire in one direction (set/unset);
-  // the page never reads it back — only whether one is stored under KEY_REF.
+  // the page never reads it back — only whether one is stored under the ref.
   const [keyDraft, setKeyDraft] = useState('')
   const [keyStored, setKeyStored] = useState(false)
   const [keyClear, setKeyClear] = useState(false)
 
-  const load = useCallback(async () => {
-    setLoadError(undefined)
-    setMissing(false)
-    try {
-      const described = await operations.describeSection(sectionNs)
-      if (described.kind === 'refused') {
-        setLoadError(described.message)
-        setPage(undefined)
-        return
-      }
-      if (described.kind === 'missing') {
-        setMissing(true)
-        setPage(undefined)
-        return
-      }
-      const view = described.view
-      const parsed = parsePage(view.value, view.revision)
-      setPage(parsed)
-      const ref = refFor(parsed.apiKeyEnv)
-      const info = await operations.describeCredential(ref)
-      setKeyStored(info !== undefined && info.configured)
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : String(error))
+  // Pushed invalidation through the shared mirror: any committed settings
+  // change replaces the snapshot, so two open surfaces converge without
+  // polling.
+  useEffect(() => scope.subscribe(() => setSnap(scope.getSnapshot())), [scope])
+
+  // Derive the draft from the ready snapshot (and re-read the credential
+  // state for the ref the section names).
+  useEffect(() => {
+    if (snap.status !== 'ready') {
       setPage(undefined)
+      return
     }
-  }, [operations, sectionNs])
-
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  // Pushed invalidation: any committed settings change refetches the section
-  // so two open surfaces converge without polling.
-  useEffect(() => {
-    const disposers = [
-      remote.$on('settings/document-updated', () => { void load() }),
-      remote.$on('credentials/reference-updated', () => { void load() }),
-    ]
-    return () => {
-      for (const dispose of disposers) dispose()
-    }
-  }, [remote, load])
+    const parsed = parsePage(snap.value, snap.revision, snap.writable)
+    setPage(parsed)
+    let stale = false
+    void operations.describeCredential(refFor(parsed.apiKeyEnv))
+      .then(info => { if (!stale) setKeyStored(info?.configured ?? false) })
+      .catch(() => { /* the describe is best-effort; the form renders either way */ })
+    return () => { stale = true }
+  }, [snap, operations])
 
   const setModel = useCallback((index: number, patch: Partial<ModelDraft>) => {
     setPage(current => {
@@ -373,7 +417,7 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
       // so a key just typed into the form reaches the /models probe without a
       // save. The clear flag means "no auth on the next probe".
       if (keyClear === false && keyDraft.length > 0) request.apiKey = keyDraft
-      const result = await operations.discoverModels(sectionNs, request)
+      const result = await operations.discoverModels(SECTION_NS, request)
       if (result.kind === 'refused') {
         setDiscoverError(t('discoverError', { detail: result.message }))
         return
@@ -417,7 +461,7 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
     } finally {
       setDiscovering(false)
     }
-  }, [operations, sectionNs, page, t, keyDraft, keyClear])
+  }, [operations, page, t, keyDraft, keyClear])
 
   const keyMode: KeyMode = keyClear ? 'clear' : keyDraft.length > 0 ? 'new' : 'keep'
 
@@ -427,10 +471,9 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
     setSaveError(undefined)
     setSaved(false)
     try {
-      // The effective ref is the section's named one (or the derived default);
-      // the credential write goes first: if it succeeds and the settings
-      // replace then conflicts, the section still points at the old ref —
-      // never the reverse (a section pointing at a missing credential).
+      // The credential write goes first: if it succeeds and the section write
+      // then conflicts, the section still points at the old ref — never the
+      // reverse (a section pointing at a missing credential).
       const ref = refFor(page.apiKeyEnv)
       if (keyClear) {
         const removed = await operations.removeCredential(ref)
@@ -441,13 +484,17 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
         if (stored.kind === 'refused') throw new Error(stored.message)
         setKeyStored(true)
       }
-      const written = await operations.replaceSection(sectionNs, wireSection(page, keyMode), page.revision)
-      if (written.kind === 'conflict') {
-        setSaveError(t('saveError', { detail: written.message }))
+      // One atomic section-root `set`, fenced at the revision the draft was
+      // read at. The scope queues the write, folds the accepted answer into
+      // the shared mirror (the subscription effect re-parses it), and reloads
+      // the latest Host state after a refused write — so a stale fence shows
+      // the fresh values instead of a dead draft.
+      const section = wireSection(page, keyMode) as Record<string, JsonValue>
+      const ok = await scope.mutate([{ op: 'set', path: [], value: section }], page.revision)
+      if (!ok) {
+        setSaveError(t('saveRefused'))
         return
       }
-      if (written.kind === 'refused') throw new Error(written.message)
-      setPage(parsePage(written.view.value, written.view.revision))
       setKeyDraft('')
       setKeyClear(false)
       setSaved(true)
@@ -456,69 +503,68 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
     } finally {
       setSaving(false)
     }
-  }, [operations, sectionNs, page, t, keyDraft, keyMode])
+  }, [scope, operations, page, t, keyDraft, keyMode])
 
-  // The ref the key operations target: the section's named one, else the
-  // derived default (the core `refFor` convention).
-  const effectiveRef = page?.apiKeyEnv !== undefined && page.apiKeyEnv.length > 0
-    ? page.apiKeyEnv
-    : KEY_REF
   // A named ref with no stored credential resolves only through a
   // launch-environment variable of the same name — say so instead of letting
   // the endpoint answer 401 without explanation.
-  const unresolvedRef = keyMode === 'keep' && !keyStored && keyDraft.length === 0
+  const unresolvedRef = page !== undefined && keyMode === 'keep' && !keyStored && keyDraft.length === 0
+  const effectiveRef = page !== undefined && page.apiKeyEnv.length > 0 ? page.apiKeyEnv : KEY_REF
 
   const hasAnyReasoning = useMemo(
     () => page?.draft.some(model => model.hasReasoning) ?? false,
     [page],
   )
 
-  if (loadError !== undefined) {
-    return <p style={css.error}>{t('loadError', { detail: loadError })}</p>
+  if (snap.status === 'loading') {
+    return <p style={css.msgMuted}>{t('loading')}</p>
   }
-  if (missing) {
-    return <p style={css.error}>{t('notMounted')}</p>
+  if (snap.status === 'unavailable') {
+    return <p style={css.msgError}>{t('unavailable')}</p>
   }
   if (page === undefined) {
-    return <p style={css.muted}>{t('loading')}</p>
+    return <p style={css.msgMuted}>{t('loading')}</p>
   }
 
+  const readOnly = !page.writable
+
+  // The Plugins page's built-in row chrome (RowDetail) already renders this
+  // row's title, ids, and description above the form — so the page starts
+  // straight with the body (the official companions render the form only).
   return (
     <div style={css.page}>
-      <div>
-        <h1 style={css.h1}>{t('title')}</h1>
-        <p style={css.sub}>{t('subtitle')}</p>
-      </div>
+      {readOnly
+        ? <p style={css.banner}>{t('readOnly')}</p>
+        : null}
 
       <div style={css.field}>
         <span style={css.label}>{t('endpoint')}</span>
-        <input
-          style={css.input}
+        <Input
           type="text"
           value={page.baseURL}
           placeholder={t('endpointPlaceholder')}
           aria-label={t('endpoint')}
+          disabled={readOnly}
           onChange={event => { setPage({ ...page, baseURL: event.target.value }); setSaved(false) }}
         />
       </div>
 
-      <div style={css.field}>
+      <div style={{ ...css.field, ...css.hairline }}>
         <div style={css.row}>
           <span style={css.label}>{t('keyInput')}</span>
           {keyStored || page.apiKeyEnv.length > 0
             ? (
-              <button
-                style={{ ...css.button, ...css.danger }}
-                type="button"
+              <Button
+                size="sm"
+                disabled={readOnly}
                 onClick={() => { setKeyClear(true); setKeyDraft('') }}
               >
                 {t('keyClear')}
-              </button>
+              </Button>
             )
             : null}
         </div>
-        <input
-          style={css.input}
+        <Input
           type="password"
           autoComplete="off"
           value={keyClear ? '' : keyDraft}
@@ -528,202 +574,210 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
               ? t('keyStoredPlaceholder')
               : t('keyNonePlaceholder')}
           aria-label={t('keyInput')}
-          disabled={keyClear}
+          disabled={keyClear || readOnly}
           onChange={event => { setKeyDraft(event.target.value); setKeyClear(false) }}
         />
         {keyClear
-          ? <span style={css.warn}>{t('keyClearNote')}</span>
+          ? <span style={css.noteWarn}>{t('keyClearNote')}</span>
           : unresolvedRef
-            ? <span style={css.warn}>{t('keyUnresolved', { value: effectiveRef })}</span>
-            : <span style={css.muted}>{t('keyStoredWhere', { value: effectiveRef })}</span>}
+            ? <span style={css.noteWarn}>{t('keyUnresolved', { value: effectiveRef })}</span>
+            : <span style={css.noteMuted}>{t('keyStoredWhere', { value: effectiveRef })}</span>}
       </div>
 
-      <div style={css.field}>
+      <div style={{ ...css.field, ...css.hairline }}>
         <span style={css.label}>{t('models')}</span>
         {page.draft.map((model, index) => (
           <div key={model.key} style={css.card}>
             <div style={css.cardHead}>
               <span style={css.cardTitle}>{model.id.length > 0 ? model.id : `#${index + 1}`}</span>
-              <button
-                style={{ ...css.button, ...css.danger }}
-                type="button"
+              <Button
+                size="sm"
+                disabled={readOnly}
                 onClick={() => {
                   setPage({ ...page, draft: page.draft.filter((_, i) => i !== index) })
                   setSaved(false)
                 }}
               >
                 {t('removeModel')}
-              </button>
+              </Button>
             </div>
             <div style={css.row}>
-              <div style={{ ...css.field, flex: 2, minWidth: 160 }}>
+              <div style={{ ...css.subField, flex: 1.2, minWidth: 140, flexBasis: 140 }}>
                 <span style={css.label}>{t('modelId')}</span>
-                <input
-                  style={css.input}
+                <Input
                   type="text"
                   value={model.id}
                   placeholder={t('modelIdPlaceholder')}
                   aria-label={t('modelId')}
+                  disabled={readOnly}
                   onChange={event => setModel(index, { id: event.target.value })}
                 />
               </div>
-              <div style={{ ...css.field, flex: 2, minWidth: 120 }}>
+              <div style={{ ...css.subField, flex: 1.2, minWidth: 140, flexBasis: 140 }}>
                 <span style={css.label}>{t('modelName')}</span>
-                <input
-                  style={css.input}
+                <Input
                   type="text"
                   value={model.name}
                   placeholder={t('modelNamePlaceholder')}
                   aria-label={t('modelName')}
+                  disabled={readOnly}
                   onChange={event => setModel(index, { name: event.target.value })}
                 />
               </div>
-              <div style={{ ...css.field, width: 120 }}>
+            </div>
+            <div style={css.row}>
+              <div style={{ ...css.subField, flex: 1, minWidth: 110, flexBasis: 110 }}>
                 <span style={css.label}>{t('contextWindow')}</span>
-                <input
-                  style={css.input}
+                <Input
                   type="number"
                   value={model.contextWindow}
                   aria-label={t('contextWindow')}
+                  disabled={readOnly}
                   onChange={event => setModel(index, { contextWindow: event.target.value })}
                 />
               </div>
-              <div style={{ ...css.field, width: 120 }}>
+              <div style={{ ...css.subField, flex: 1, minWidth: 110, flexBasis: 110 }}>
                 <span style={css.label}>{t('maxTokens')}</span>
-                <input
-                  style={css.input}
+                <Input
                   type="number"
                   value={model.maxTokens}
                   aria-label={t('maxTokens')}
+                  disabled={readOnly}
                   onChange={event => setModel(index, { maxTokens: event.target.value })}
                 />
               </div>
-              <div style={{ ...css.field, width: 120 }}>
+            </div>
+            <div style={css.row}>
+              <div style={{ ...css.subField, flex: 1, minWidth: 96, flexBasis: 96 }}>
                 <span style={css.label}>{t('imageMaxPixels')}</span>
-                <input
-                  style={css.input}
+                <Input
                   type="number"
                   value={model.imageMaxPixels}
                   aria-label={t('imageMaxPixels')}
+                  disabled={readOnly}
                   onChange={event => setModel(index, { imageMaxPixels: event.target.value })}
                 />
               </div>
-              <div style={{ ...css.field, width: 120 }}>
+              <div style={{ ...css.subField, flex: 1, minWidth: 96, flexBasis: 96 }}>
                 <span style={css.label}>{t('imageMaxBytes')}</span>
-                <input
-                  style={css.input}
+                <Input
                   type="number"
                   value={model.imageMaxBytes}
                   aria-label={t('imageMaxBytes')}
+                  disabled={readOnly}
                   onChange={event => setModel(index, { imageMaxBytes: event.target.value })}
                 />
               </div>
             </div>
             <div style={css.checks}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={model.multimodal}
-                  onChange={event => setModel(index, { multimodal: event.target.checked })}
-                />{' '}
-                {t('multimodal')}
-              </label>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={model.preserveThinking}
-                  onChange={event => setModel(index, { preserveThinking: event.target.checked })}
-                />{' '}
-                {t('preserveThinking')}
-              </label>
+              <Checkbox
+                checked={model.multimodal}
+                disabled={readOnly}
+                label={t('multimodal')}
+                onChange={checked => setModel(index, { multimodal: checked })}
+              />
+              <Checkbox
+                checked={model.preserveThinking}
+                disabled={readOnly}
+                label={t('preserveThinking')}
+                onChange={checked => setModel(index, { preserveThinking: checked })}
+              />
             </div>
 
             {model.hasReasoning
               ? (
-                <div style={{ ...css.field, borderTop: '1px solid rgba(127,127,127,0.25)', paddingTop: 8 }}>
+                <div style={{ ...css.subField, ...css.divider }}>
                   <div style={css.row}>
                     <span style={{ ...css.label, fontWeight: 600 }}>{t('reasoning')}</span>
-                    <button
-                      style={{ ...css.button, ...css.danger }}
-                      type="button"
+                    <Button
+                      size="sm"
+                      disabled={readOnly}
                       onClick={() => setModel(index, { hasReasoning: false })}
                     >
                       {t('removeReasoning')}
-                    </button>
+                    </Button>
+                  </div>
+                  <div style={{ ...css.row, marginTop: 6 }}>
+                    <span style={{ ...css.label, ...css.effortColId }}>{t('effortId')}</span>
+                    <span style={{ ...css.label, ...css.effortColName }}>{t('effortName')}</span>
+                    <span style={{ ...css.label, ...css.effortColWire }}>{t('effortWire')}</span>
+                    <span style={css.effortActionSlot} />
                   </div>
                   {model.efforts.map((effort, effortIndex) => (
                     <div key={effort.key} style={{ ...css.row, marginTop: 6 }}>
-                      <div style={{ ...css.field, width: 120 }}>
-                        <span style={css.label}>{t('effortId')}</span>
-                        <input
-                          style={css.input}
+                      <div style={css.effortColId}>
+                        <Input
                           type="text"
                           value={effort.id}
                           aria-label={t('effortId')}
+                          disabled={readOnly}
                           onChange={event => setEffort(index, effortIndex, { id: event.target.value })}
                         />
                       </div>
-                      <div style={{ ...css.field, flex: 1, minWidth: 100 }}>
-                        <span style={css.label}>{t('effortName')}</span>
-                        <input
-                          style={css.input}
+                      <div style={css.effortColName}>
+                        <Input
                           type="text"
                           value={effort.name}
                           placeholder={t('effortNamePlaceholder')}
                           aria-label={t('effortName')}
+                          disabled={readOnly}
                           onChange={event => setEffort(index, effortIndex, { name: event.target.value })}
                         />
                       </div>
-                      <div style={{ ...css.field, flex: 1, minWidth: 120 }}>
-                        <span style={css.label}>{t('effortWire')}</span>
-                        <input
-                          style={css.input}
+                      <div style={css.effortColWire}>
+                        <Input
                           type="text"
                           value={effort.wire}
                           placeholder={t('effortWirePlaceholder')}
                           aria-label={t('effortWire')}
+                          disabled={readOnly}
                           onChange={event => setEffort(index, effortIndex, { wire: event.target.value })}
                         />
                       </div>
-                      <button
-                        style={{ ...css.button, ...css.danger }}
-                        type="button"
-                        onClick={() => setModel(index, { efforts: model.efforts.filter((_, i) => i !== effortIndex) })}
-                      >
-                        {t('removeEffort')}
-                      </button>
+                      <span style={css.effortActionSlot}>
+                        <Button
+                          size="sm"
+                          disabled={readOnly}
+                          onClick={() => setModel(index, { efforts: model.efforts.filter((_, i) => i !== effortIndex) })}
+                        >
+                          {t('removeEffort')}
+                        </Button>
+                      </span>
                     </div>
                   ))}
                   <div style={{ ...css.row, marginTop: 6 }}>
-                    <button
-                      style={css.button}
-                      type="button"
+                    <Button
+                      size="sm"
+                      disabled={readOnly}
                       onClick={() => setModel(index, { efforts: [...model.efforts, { key: newKey(), id: '', name: '', wire: '' }] })}
                     >
                       {t('addEffort')}
-                    </button>
+                    </Button>
                   </div>
                   <div style={{ ...css.row, marginTop: 6 }}>
-                    <div style={{ ...css.field, width: 240 }}>
+                    <div style={{ ...css.subField, width: 'fit-content' }}>
                       <span style={css.label}>{t('offMode')}</span>
-                      <select
-                        style={css.input}
+                      <SegmentedControl
+                        id={`off-mode-${model.key}`}
                         value={model.offMode}
-                        aria-label={t('offMode')}
-                        onChange={event => setModel(index, { offMode: event.target.value })}
-                      >
-                        <option value="chat-template-kwargs">{t('offModeKwargs')}</option>
-                        <option value="omit">{t('offModeOmit')}</option>
-                      </select>
+                        label={t('offMode')}
+                        disabled={readOnly}
+                        options={[
+                          { value: 'chat-template-kwargs', label: t('offModeKwargs') },
+                          { value: 'omit', label: t('offModeOmit') },
+                        ]}
+                        onChange={value => setModel(index, { offMode: value })}
+                      />
                     </div>
                   </div>
                   <div style={{ ...css.row, marginTop: 6 }}>
-                    <div style={{ ...css.field, width: 150 }}>
+                    <div style={{ ...css.subField, width: 150 }}>
                       <span style={css.label}>{t('defaultEffort')}</span>
                       <select
-                        style={css.input}
+                        style={css.select}
                         value={model.defaultEffort}
                         aria-label={t('defaultEffort')}
+                        disabled={readOnly}
                         onChange={event => setModel(index, { defaultEffort: event.target.value })}
                       >
                         <option value="">{t('defaultEffortUnset')}</option>
@@ -736,25 +790,24 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
                 </div>
               )
               : (
-                <div style={{ ...css.row, borderTop: '1px solid rgba(127,127,127,0.25)', paddingTop: 8 }}>
-                  <span style={css.muted}>{t('noReasoning')}</span>
-                  <button
-                    style={css.button}
-                    type="button"
+                <div style={{ ...css.row, ...css.divider }}>
+                  <span style={css.noteMuted}>{t('noReasoning')}</span>
+                  <Button
+                    size="sm"
+                    disabled={readOnly}
                     onClick={() => setModel(index, {
                       hasReasoning: true,
                       efforts: [{ key: newKey(), id: 'off', name: '', wire: 'none' }],
                     })}
                   >
                     {t('addReasoning')}
-                  </button>
+                  </Button>
                 </div>
               )}
           </div>
         ))}
-        <button
-          style={css.button}
-          type="button"
+        <Button
+          disabled={readOnly}
           onClick={() => {
             setPage({
               ...page,
@@ -770,41 +823,38 @@ export function QwenLocalSection({ operations, sectionNs, remote, t }: QwenLocal
           }}
         >
           {t('addModel')}
-        </button>
+        </Button>
       </div>
 
-      <div style={css.row}>
-        <button
-          style={css.button}
-          type="button"
-          disabled={discovering || page.baseURL.length === 0}
+      <div style={{ ...css.footer, ...css.hairline }}>
+        <Button
+          disabled={discovering || page.baseURL.length === 0 || readOnly}
           onClick={() => { void onDiscover() }}
         >
           {discovering ? t('discovering') : t('discover')}
-        </button>
-        <button
-          style={css.primary}
-          type="button"
-          disabled={saving}
+        </Button>
+        <Button
+          variant="primary"
+          disabled={saving || readOnly}
           onClick={() => { void onSave() }}
         >
           {saving ? t('saving') : t('save')}
-        </button>
+        </Button>
         {saved && saveError === undefined
           ? <span style={css.ok}>{t('saved')}</span>
           : null}
       </div>
       {saveError !== undefined
-        ? <p style={css.error}>{saveError}</p>
+        ? <p style={css.msgError}>{saveError}</p>
         : null}
       {discoverNote !== undefined
-        ? <p style={css.status}>{discoverNote}</p>
+        ? <p style={css.msgStatus}>{discoverNote}</p>
         : null}
       {discoverError !== undefined
-        ? <p style={css.error}>{discoverError}</p>
+        ? <p style={css.msgError}>{discoverError}</p>
         : null}
       {!hasAnyReasoning
-        ? <p style={css.muted}>{t('noReasoning')}</p>
+        ? <p style={css.msgMuted}>{t('noReasoning')}</p>
         : null}
     </div>
   )
